@@ -17,6 +17,8 @@
 #include "sync/WizAvatarHost.h"
 #include "utils/WizStyleHelper.h"
 
+#include "share/WizDocumentStyle.h"
+
 
 WizDocumentListViewDocumentItem::WizDocumentListViewDocumentItem(WizExplorerApp& app,
                                                    const WizDocumentListViewItemData& data)
@@ -74,6 +76,7 @@ bool WizDocumentListViewDocumentItem::isContainsAttachment() const
 int WizDocumentListViewDocumentItem::badgeType(bool isSummaryView) const
 {
     int nType = m_data.doc.nProtected ? (isSummaryView ? DocTypeEncrytedInSummary : DocTypeEncrytedInTitle) : DocTypeNormal;
+    nType = m_data.doc.isAlwaysOnTop() ? (DocTypeAlwaysOnTop | nType) : nType;
     nType = isContainsAttachment() ? (DocTypeContainsAttachment | nType) : nType;
     return nType;
 }
@@ -181,6 +184,7 @@ void WizDocumentListViewDocumentItem::updateInfoList()
 
     if (m_data.nType == TypeGroupDocument) {
         QString strAuthor = db.getDocumentOwnerAlias(m_data.doc);
+        m_strAuthor = strAuthor;
 //        strAuthor += strAuthor.isEmpty() ? "" : " ";
 
         switch (m_nSortingType) {
@@ -362,6 +366,9 @@ bool WizDocumentListViewDocumentItem::operator <(const QListWidgetItem &other) c
 
     if (other.type() == WizDocumentListType_Section)
     {
+        if(document().isAlwaysOnTop())
+            return true;
+
         const WizDocumentListViewSectionItem* secItem = dynamic_cast<const WizDocumentListViewSectionItem*>(&other);
         return compareWithSectionItem(secItem);
     }
@@ -370,6 +377,18 @@ bool WizDocumentListViewDocumentItem::operator <(const QListWidgetItem &other) c
     Q_ASSERT(pOther && m_nSortingType == pOther->m_nSortingType);
 
 
+    if (pOther->m_data.doc.isAlwaysOnTop() || m_data.doc.isAlwaysOnTop())
+    {
+        if (pOther->m_data.doc.isAlwaysOnTop() && m_data.doc.isAlwaysOnTop())
+        {
+        }
+        else
+        {
+            bool bTop = m_data.doc.isAlwaysOnTop();
+            return bTop;
+        }
+    }
+    //
     switch (m_nSortingType) {
     case SortingByCreatedTime:
         // default compare use create time     //There is a bug in Qt sort. if two items have same time, use title to sort.
@@ -472,6 +491,9 @@ void WizDocumentListViewDocumentItem::draw_impl(QPainter* p, const QStyleOptionV
         case WizDocumentListView::TypeThumbnail:
             drawPrivateSummaryView_impl(p, vopt);
             return;
+        case WizDocumentListView::TypeSearchResult:
+            drawPrivateSummaryView_impl(p, vopt);
+            return;
         case WizDocumentListView::TypeTwoLine:
             drawPrivateTwoLineView_impl(p, vopt);
             return;
@@ -487,6 +509,9 @@ void WizDocumentListViewDocumentItem::draw_impl(QPainter* p, const QStyleOptionV
     {
         switch (nViewType) {
         case WizDocumentListView::TypeThumbnail:
+            drawGroupSummaryView_impl(p, vopt);
+            return;
+        case WizDocumentListView::TypeSearchResult:
             drawGroupSummaryView_impl(p, vopt);
             return;
         case WizDocumentListView::TypeTwoLine:
@@ -532,22 +557,51 @@ void WizDocumentListViewDocumentItem::drawPrivateSummaryView_impl(QPainter* p, c
 {
     bool bSelected = vopt->state & QStyle::State_Selected;
     bool bFocused = listWidget()->hasFocus();
+    //
+    WizDocumentListView* view = qobject_cast<WizDocumentListView*>(listWidget());
+    Q_ASSERT(view);
+    bool searchResult = view->isSearchResult();
 
-    WIZABSTRACT thumb;
-    WizThumbCache::instance()->find(m_data.doc.strKbGUID, m_data.doc.strGUID, thumb);
 
-    QRect rcd = drawItemBackground(p, vopt->rect, bSelected, bFocused);
-
+    QString title;
+    QString text;
+    //
     QPixmap pmt;
-    if (!thumb.image.isNull()) {
-        pmt = QPixmap::fromImage(thumb.image);
-    }
-
+    //
+    QRect rcd = drawItemBackground(p, vopt->rect, bSelected, bFocused);
     rcd.setTop(rcd.top() + nTextTopMargin);
-    int nType = badgeType(true);
-    Utils::WizStyleHelper::drawListViewItemThumb(p, rcd, nType, m_data.doc.strTitle, m_data.infoList,
-                                               needDrawDocumentLocation() ? documentLocation() : "", thumb.text,
-                                              bFocused, bSelected, pmt);
+    //
+    WIZSTYLEDATA style = WizDocumentStyle::instance().getStyle(document().strStyleGUID);
+    //
+    WIZABSTRACT thumb;
+    if (searchResult) {
+        //
+        title = m_data.doc.strHighlightTitle;
+        text = m_data.doc.strHighlightText;
+        //
+        if (title.isEmpty()) {
+            title = m_data.doc.strTitle;
+        }
+        //
+        QString info = m_strAuthor + " " + m_data.doc.tCreated.toHumanFriendlyString() + " (" + documentLocation() + ")";
+        //
+        Utils::WizStyleHelper::drawListViewItemSearchResult(p, rcd, title, info,
+                                          text, bFocused, bSelected, style.crTextColor);
+        //
+    } else {
+        WizThumbCache::instance()->find(m_data.doc.strKbGUID, m_data.doc.strGUID, thumb);
+        if (!thumb.image.isNull()) {
+            pmt = QPixmap::fromImage(thumb.image);
+        }
+        //
+        title = m_data.doc.strTitle;
+        text = thumb.text;
+        //
+        int nType = badgeType(true);
+        Utils::WizStyleHelper::drawListViewItemThumb(p, rcd, nType, title, m_data.infoList,
+                                                   needDrawDocumentLocation() ? documentLocation() : "", text,
+                                                  bFocused, bSelected, pmt, style.crTextColor);
+    }
 }
 
 const int nAvatarRightMargin = 8;
@@ -555,26 +609,52 @@ void WizDocumentListViewDocumentItem::drawGroupSummaryView_impl(QPainter* p, con
 {
     bool bSelected = vopt->state & QStyle::State_Selected;
     bool bFocused = listWidget()->hasFocus();
+    //
+    WizDocumentListView* view = qobject_cast<WizDocumentListView*>(listWidget());
+    Q_ASSERT(view);
+    bool searchResult = view->isSearchResult();
 
-    WIZABSTRACT thumb;
-    WizThumbCache::instance()->find(m_data.doc.strKbGUID, m_data.doc.strGUID, thumb);
-
+    QString title;
+    QString text;
+    //
+    QPixmap pmt;
+    //
     QRect rcd = drawItemBackground(p, vopt->rect, bSelected, bFocused);
-
+    //
     QPixmap pmAvatar;
     WizAvatarHost::avatar(m_data.strAuthorId, &pmAvatar);
     QRect rcAvatar = rcd.adjusted(8 ,12, 0, 0);
     rcAvatar = Utils::WizStyleHelper::drawAvatar(p, rcAvatar, pmAvatar);
     rcd.setLeft(rcAvatar.right() + nAvatarRightMargin);
     rcd.setTop(rcd.top() + nTextTopMargin);
+    //
+    if (searchResult)
+    {
+        title = m_data.doc.strHighlightTitle;
+        text = m_data.doc.strHighlightText;
+        //
+        QString info = m_strAuthor + " " + m_data.doc.tCreated.toHumanFriendlyString() + " (" + documentLocation() + ")";
+        //
+        Utils::WizStyleHelper::drawListViewItemSearchResult(p, rcd, title, info,
+                                          text, bFocused, bSelected);
+    }
+    else
+    {
+        WIZABSTRACT thumb;
+        WizThumbCache::instance()->find(m_data.doc.strKbGUID, m_data.doc.strGUID, thumb);
 
-    int nType = badgeType(true);
-    Utils::WizStyleHelper::drawListViewItemThumb(p, rcd, nType, m_data.doc.strTitle, m_data.infoList,
-                                              needDrawDocumentLocation() ? documentLocation() : "", thumb.text, bFocused, bSelected);
+        int nType = badgeType(true);
+        Utils::WizStyleHelper::drawListViewItemThumb(p, rcd, nType, m_data.doc.strTitle, m_data.infoList,
+                                                  needDrawDocumentLocation() ? documentLocation() : "", thumb.text, bFocused, bSelected);
+
+    }
+
 }
 
 void WizDocumentListViewDocumentItem::drawPrivateTwoLineView_impl(QPainter* p, const QStyleOptionViewItem* vopt) const
 {
+    WIZSTYLEDATA style = WizDocumentStyle::instance().getStyle(document().strStyleGUID);
+    //
     bool bSelected = vopt->state & QStyle::State_Selected;
     bool bFocused = listWidget()->hasFocus();
 
@@ -583,7 +663,7 @@ void WizDocumentListViewDocumentItem::drawPrivateTwoLineView_impl(QPainter* p, c
 
     int nType = badgeType();
     Utils::WizStyleHelper::drawListViewItemThumb(p, rcd, nType, m_data.doc.strTitle, m_data.infoList,
-                                              needDrawDocumentLocation() ? documentLocation() : "", NULL, bFocused, bSelected);
+                                              needDrawDocumentLocation() ? documentLocation() : "", NULL, bFocused, bSelected, QPixmap(), style.crTextColor);
 }
 
 void WizDocumentListViewDocumentItem::drawGroupTwoLineView_impl(QPainter* p, const QStyleOptionViewItem* vopt) const
@@ -607,13 +687,15 @@ void WizDocumentListViewDocumentItem::drawGroupTwoLineView_impl(QPainter* p, con
 
 void WizDocumentListViewDocumentItem::drawOneLineView_impl(QPainter* p, const  QStyleOptionViewItem* vopt) const
 {
+    WIZSTYLEDATA style = WizDocumentStyle::instance().getStyle(document().strStyleGUID);
+    //
     bool bSelected = vopt->state & QStyle::State_Selected;
     bool bFocused = listWidget()->hasFocus();
 
     QRect rcd = drawItemBackground(p, vopt->rect, bSelected, bFocused);
 
     int nType = badgeType();
-    Utils::WizStyleHelper::drawListViewItemThumb(p, rcd, nType, m_data.doc.strTitle, QStringList(), "", NULL, bFocused, bSelected);
+    Utils::WizStyleHelper::drawListViewItemThumb(p, rcd, nType, m_data.doc.strTitle, QStringList(), "", NULL, bFocused, bSelected, QPixmap(), style.crTextColor);
 }
 
 void WizDocumentListViewDocumentItem::drawSyncStatus(QPainter* p, const QStyleOptionViewItem* vopt, int nViewType) const
@@ -624,14 +706,17 @@ void WizDocumentListViewDocumentItem::drawSyncStatus(QPainter* p, const QStyleOp
     WizDatabase& db = m_app.databaseManager().db(m_data.doc.strKbGUID);
     bool isRetina = WizIsHighPixel();
     strIconPath = ::WizGetSkinResourcePath(m_app.userSettings().skin());
+    //
+    bool attachModified = false;
+    /*  //影响显示效率
     CWizDocumentAttachmentDataArray arrayAttachment;
     db.getDocumentAttachments(m_data.doc.strGUID, arrayAttachment);
-    bool attachModified = false;
     for (WIZDOCUMENTATTACHMENTDATAEX attachment : arrayAttachment)
     {
         if (db.isAttachmentModified(attachment.strGUID))
             attachModified = true;        
     }
+    */
     if (db.isDocumentModified(m_data.doc.strGUID) || attachModified)
     {
         strIconPath += isRetina ? "document_needUpload@2x.png" : "document_needUpload.png";
@@ -680,8 +765,16 @@ QRect WizDocumentListViewDocumentItem::drawItemBackground(QPainter* p, const QRe
     {
         return Utils::WizStyleHelper::initListViewItemPainter(p, rect, Utils::WizStyleHelper::ListBGTypeUnread, useFullLineSeperator);
     }
-
-    return Utils::WizStyleHelper::initListViewItemPainter(p, rect, Utils::WizStyleHelper::ListBGTypeNone, useFullLineSeperator);
+    //
+    WIZSTYLEDATA style = WizDocumentStyle::instance().getStyle(document().strStyleGUID);
+    if (style.valid())
+    {
+        return Utils::WizStyleHelper::initListViewItemPainter(p, rect, Utils::WizStyleHelper::ListBGTypeCustom, useFullLineSeperator, style.crBackColor);
+    }
+    else
+    {
+        return Utils::WizStyleHelper::initListViewItemPainter(p, rect, Utils::WizStyleHelper::ListBGTypeNone, useFullLineSeperator);
+    }
 }
 
 
@@ -702,6 +795,9 @@ bool WizDocumentListViewSectionItem::operator<(const QListWidgetItem& other) con
     if (other.type() == WizDocumentListType_Document)
     {
         const WizDocumentListViewDocumentItem* docItem = dynamic_cast<const WizDocumentListViewDocumentItem*>(&other);
+        if(docItem->document().isAlwaysOnTop())
+            return false;
+
         return compareWithDocumentItem(docItem);
     }
     else

@@ -10,11 +10,10 @@
 #include "WizApiEntry.h"
 #include "share/WizThreads.h"
 
-// use 5 minutes locally, server use 20 minutes
-#define TOKEN_TIMEOUT_INTERVAL 60 * 5
 
 WizTokenPrivate::WizTokenPrivate(WizToken* token)
     : m_bProcessing(false)
+    , m_bLastIsNetworkError(false)
     , m_mutex(new QMutex(QMutex::Recursive))
     , q(token)
 
@@ -31,11 +30,9 @@ QString WizTokenPrivate::token()
     QMutexLocker locker(m_mutex);
     Q_UNUSED(locker);
     //
-//    Q_ASSERT(!m_strUserId.isEmpty() && !m_strPasswd.isEmpty());
-
     if (m_info.strToken.isEmpty())
     {
-        WizKMAccountsServer asServer(WizCommonApiEntry::syncUrl());
+        WizKMAccountsServer asServer;
         if (asServer.login(m_strUserId, m_strPasswd))
         {
             m_info = asServer.getUserInfo();
@@ -46,6 +43,7 @@ QString WizTokenPrivate::token()
         {
             m_lastErrorCode = asServer.getLastErrorCode();
             m_lastErrorMessage = asServer.getLastErrorMessage();
+            m_bLastIsNetworkError = asServer.isNetworkError();
             return QString();
         }
     }
@@ -56,13 +54,11 @@ QString WizTokenPrivate::token()
     }
     else
     {
-        WIZUSERINFO info;
-        info.strToken = m_info.strToken;
-        info.strKbGUID = m_info.strKbGUID;
-        WizKMAccountsServer asServer(WizCommonApiEntry::syncUrl());
+        WIZUSERINFO info = m_info;
+        WizKMAccountsServer asServer;
         asServer.setUserInfo(info);
 
-        if (asServer.keepAlive(m_info.strToken))
+        if (asServer.keepAlive())
         {
             m_info.tTokenExpried = QDateTime::currentDateTime().addSecs(TOKEN_TIMEOUT_INTERVAL);
             return m_info.strToken;
@@ -80,6 +76,7 @@ QString WizTokenPrivate::token()
             {
                 m_lastErrorCode = asServer.getLastErrorCode();
                 m_lastErrorMessage = asServer.getLastErrorMessage();
+                m_bLastIsNetworkError = asServer.isNetworkError();
                 return QString();
             }
         }
@@ -140,12 +137,13 @@ void WizTokenPrivate::setPasswd(const QString& strPasswd)
     m_strPasswd = strPasswd;
 }
 
-WIZUSERINFO WizTokenPrivate::info()
+WIZUSERINFO WizTokenPrivate::userInfo()
 {
     QMutexLocker locker(m_mutex);
     Q_UNUSED(locker);
     //
-    return m_info;
+    WIZUSERINFO ret = m_info;
+    return ret;
 }
 
 int WizTokenPrivate::lastErrorCode() const
@@ -164,6 +162,13 @@ QString WizTokenPrivate::lastErrorMessage() const
     return m_lastErrorMessage;
 }
 
+bool WizTokenPrivate::lastIsNetworkError() const
+{
+    QMutexLocker locker(m_mutex);
+    Q_UNUSED(locker);
+    //
+    return m_bLastIsNetworkError;
+}
 
 static WizTokenPrivate* d = 0;
 static WizToken* m_instance = 0;
@@ -225,11 +230,11 @@ void WizToken::setPasswd(const QString& strPasswd)
     d->setPasswd(strPasswd);
 }
 
-WIZUSERINFO WizToken::info()
+WIZUSERINFO WizToken::userInfo()
 {
     Q_ASSERT(m_instance);
 
-    return d->info();
+    return d->userInfo();
 }
 
 QString WizToken::lastErrorMessage()
@@ -239,6 +244,12 @@ QString WizToken::lastErrorMessage()
     return d->lastErrorMessage();
 }
 
+bool WizToken::lastIsNetworkError()
+{
+    Q_ASSERT(m_instance);
+
+    return d->lastIsNetworkError();
+}
 int WizToken::lastErrorCode()
 {
     Q_ASSERT(m_instance);

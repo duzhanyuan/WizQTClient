@@ -52,11 +52,12 @@
 #include "share/WizUIHelper.h"
 #include "share/WizSettings.h"
 #include "share/WizAnimateAction.h"
-#include "share/WizSearchIndexer.h"
+#include "share/WizSearch.h"
 #include "share/WizObjectDataDownloader.h"
 #include "utils/WizPathResolve.h"
 #include "utils/WizStyleHelper.h"
 #include "utils/WizMisc.h"
+#include "utils/WizPinyin.h"
 #include "widgets/WizFramelessWebDialog.h"
 #include "widgets/WizScreenShotWidget.h"
 #include "widgets/WizImageButton.h"
@@ -84,7 +85,6 @@
 #include "sync/WizToken.h"
 
 #include "WizUserVerifyDialog.h"
-#include "WizNoteComments.h"
 #include "WizMobileFileReceiver.h"
 #include "WizDocTemplateDialog.h"
 #include "share/WizFileMonitor.h"
@@ -98,9 +98,10 @@
 #include "WizPositionDelegate.h"
 #include "core/WizAccountManager.h"
 #include "share/WizWebEngineView.h"
-#include "rapidjson/document.h"
 #include "widgets/WizExecutingActionDialog.h"
 #include "widgets/WizUserServiceExprDialog.h"
+
+#include "share/jsoncpp/json/json.h"
 
 #define MAINWINDOW  "MainWindow"
 
@@ -116,8 +117,8 @@ WizMainWindow::WizMainWindow(WizDatabaseManager& dbMgr, QWidget *parent)
     , m_dbMgr(dbMgr)
     , m_progress(new WizProgressDialog(this))
     , m_settings(new WizUserSettings(dbMgr.db()))
-    , m_sync(new WizKMSyncThread(dbMgr.db(), this))
-    , m_searchIndexer(new WizSearchIndexer(m_dbMgr, this))
+    , m_syncQuick(new WizKMSyncThread(dbMgr.db(), true, this))
+    , m_syncFull(new WizKMSyncThread(dbMgr.db(), false, this))
     , m_searcher(new WizSearcher(m_dbMgr, this))
     , m_console(nullptr)
     , m_userVerifyDialog(nullptr)
@@ -167,8 +168,17 @@ WizMainWindow::WizMainWindow(WizDatabaseManager& dbMgr, QWidget *parent)
     , m_trayMenu(nullptr)
     , m_mobileFileReceiver(nullptr)
     , m_bQuickDownloadMessageEnable(false)
+    , m_quiting(false)
 {
+#ifdef QT_DEBUG
+    int ret = WizToolsSmartCompare("H", "d");
+    qDebug() << ret;
+#endif
+
     WizGlobal::setMainWindow(this);
+    WizKMSyncThread::setQuickThread(m_syncQuick);
+    //
+    qRegisterMetaType<WIZGROUPDATA>("WIZGROUPDATA");
     //
 #ifndef Q_OS_MAC
     clientLayout()->addWidget(m_toolBar);
@@ -193,26 +203,28 @@ WizMainWindow::WizMainWindow(WizDatabaseManager& dbMgr, QWidget *parent)
 #endif
 
     // search and full text search
-    m_searchIndexer->start(QThread::IdlePriority);
     m_searcher->start(QThread::HighPriority);
 
     // syncing thread
-    m_sync->setFullSyncInterval(userSettings().syncInterval());
-    connect(m_sync, SIGNAL(processLog(const QString&)), SLOT(on_syncProcessLog(const QString&)));
-    connect(m_sync, SIGNAL(promptMessageRequest(int, const QString&, const QString&)),
+    m_syncFull->setFullSyncInterval(userSettings().syncInterval());
+    connect(m_syncFull, SIGNAL(processLog(const QString&)), SLOT(on_syncProcessLog(const QString&)));
+    connect(m_syncFull, SIGNAL(promptMessageRequest(int, const QString&, const QString&)),
             SLOT(on_promptMessage_request(int, QString, QString)));
-    connect(m_sync, SIGNAL(promptFreeServiceExpr()), SLOT(on_promptFreeServiceExpr()));
-    connect(m_sync, SIGNAL(promptVipServiceExpr()), SLOT(on_promptVipServiceExpr()));
+    connect(m_syncFull, SIGNAL(promptFreeServiceExpr(WIZGROUPDATA)), SLOT(on_promptFreeServiceExpr(WIZGROUPDATA)));
+    connect(m_syncFull, SIGNAL(promptVipServiceExpr(WIZGROUPDATA)), SLOT(on_promptVipServiceExpr(WIZGROUPDATA)));
 
-    connect(m_sync, SIGNAL(bubbleNotificationRequest(const QVariant&)),
+    connect(m_syncFull, SIGNAL(bubbleNotificationRequest(const QVariant&)),
             SLOT(on_bubbleNotification_request(const QVariant&)));
-    connect(m_sync, SIGNAL(syncStarted(bool)), SLOT(on_syncStarted(bool)));
-    connect(m_sync, SIGNAL(syncFinished(int, QString, bool)), SLOT(on_syncDone(int, QString, bool)));
+    connect(m_syncFull, SIGNAL(syncStarted(bool)), SLOT(on_syncStarted(bool)));
+    connect(m_syncFull, SIGNAL(syncFinished(int, bool, QString, bool)), SLOT(on_syncDone(int, bool, QString, bool)));
 
+    connect(m_syncQuick, SIGNAL(promptFreeServiceExpr(WIZGROUPDATA)), SLOT(on_promptFreeServiceExpr(WIZGROUPDATA)));
+    connect(m_syncQuick, SIGNAL(promptVipServiceExpr(WIZGROUPDATA)), SLOT(on_promptVipServiceExpr(WIZGROUPDATA)));
+    //
     // 如果没有禁止自动同步，则在打开软件后立即同步一次
     if (m_settings->syncInterval() > 0)
     {
-        QTimer::singleShot(15 * 1000, m_sync, SLOT(syncAfterStart()));
+        QTimer::singleShot(15 * 1000, m_syncFull, SLOT(syncAfterStart()));
     }
 
     connect(m_searcher, SIGNAL(searchProcess(const QString&, const CWizDocumentDataArray&, bool, bool)),
@@ -270,9 +282,8 @@ WizMainWindow::WizMainWindow(WizDatabaseManager& dbMgr, QWidget *parent)
     setupFullScreenMode(this);
 #endif
 
-    WizNoteComments::init();
-    //
-    m_sync->start(QThread::IdlePriority);
+    m_syncFull->start(QThread::IdlePriority);
+    m_syncQuick->start(QThread::IdlePriority);
     //
     setSystemTrayIconVisible(userSettings().showSystemTrayIcon());
 
@@ -287,7 +298,7 @@ WizMainWindow::WizMainWindow(WizDatabaseManager& dbMgr, QWidget *parent)
     if (dbMgr.db().hasBiz())
     {
         QTimer* syncMessageTimer = new QTimer(this);
-        connect(syncMessageTimer, SIGNAL(timeout()), m_sync, SLOT(quickDownloadMesages()));
+        connect(syncMessageTimer, SIGNAL(timeout()), m_syncFull, SLOT(quickDownloadMesages()));
         syncMessageTimer->setInterval(3 * 1000 * 60);
         syncMessageTimer->start(3 * 1000 * 60);
     }
@@ -373,14 +384,22 @@ void WizMainWindow::on_application_aboutToQuit()
 
 void WizMainWindow::cleanOnQuit()
 {
+    m_quiting = true;
+    //
     WizObjectDownloaderHost::instance()->waitForDone();
+    WizKMSyncThread::setQuickThread(NULL);
     //
     m_category->saveExpandState();
     saveStatus();
     //
-    m_sync->waitForDone();
+    auto full = m_syncFull;
+    m_syncFull = NULL;
+    full->waitForDone();
     //
-    m_searchIndexer->waitForDone();
+    auto quick = m_syncQuick;
+    m_syncQuick = NULL;
+    quick->waitForDone();
+    //
     m_searcher->waitForDone();
     //
     m_doc->waitForDone();
@@ -390,16 +409,13 @@ void WizMainWindow::cleanOnQuit()
     {
         m_mobileFileReceiver->waitForDone();
     }
+    //
+    WizQueuedThreadsShutdown();
 }
 
 WizSearcher*WizMainWindow::searcher()
 {
     return m_searcher;
-}
-
-void WizMainWindow::rebuildFTS()
-{
-    m_searchIndexer->rebuild();
 }
 
 WizMainWindow*WizMainWindow::instance()
@@ -416,6 +432,16 @@ QNetworkDiskCache*WizMainWindow::webViewNetworkCache()
 WizDocumentView* WizMainWindow::docView()
 {
     return m_doc;
+}
+
+void WizMainWindow::trySaveCurrentNote(std::function<void(const QVariant &)> callback)
+{
+    if (m_doc->noteLoaded()) {
+        m_doc->web()->trySaveDocument(m_doc->note(), false, callback);
+        return;
+    }
+    //
+    callback(QVariant(true));
 }
 
 void WizMainWindow::closeEvent(QCloseEvent* event)
@@ -611,9 +637,10 @@ void WizMainWindow::on_checkUpgrade_finished(bool bUpgradeAvaliable)
 
 bool isXMLRpcErrorCodeRelatedWithUserAccount(int nErrorCode)
 {
-    return WIZKM_XMLRPC_ERROR_INVALID_TOKEN == nErrorCode ||
+    return //WIZKM_XMLRPC_ERROR_INVALID_TOKEN == nErrorCode ||
             WIZKM_XMLRPC_ERROR_INVALID_USER == nErrorCode ||
-            WIZKM_XMLRPC_ERROR_INVALID_PASSWORD == nErrorCode;
+            WIZKM_XMLRPC_ERROR_INVALID_PASSWORD == nErrorCode ||
+            WIZKM_XMLRPC_ERROR_SYSTEM_ERROR == nErrorCode;
 }
 
 void WizMainWindow::on_TokenAcquired(const QString& strToken)
@@ -639,25 +666,22 @@ void WizMainWindow::on_TokenAcquired(const QString& strToken)
             m_settings->setPassword("");
 
             qDebug() << "username or password error, need relogin.";
-            WizMessageBox::warning(this, tr("Info"), tr("Username / password error. Please login again."));
+            if (nErrorCode == WIZKM_XMLRPC_ERROR_SYSTEM_ERROR)
+            {
+                WizMessageBox::warning(this, tr("Info"), WizToken::lastErrorMessage());
+            }
+            else
+            {
+                WizMessageBox::warning(this, tr("Info"), tr("Username / password error. Please login again."));
+            }
             on_actionLogout_triggered();
-
-//            if (!m_userVerifyDialog)
-//            {
-//                m_userVerifyDialog = new CWizUserVerifyDialog(m_dbMgr.db().GetUserId(), tr("sorry, sync failed. please input your password and try again."), this);
-//                connect(m_userVerifyDialog, SIGNAL(accepted()), SLOT(on_syncDone_userVerified()));
-//            }
-
-//            m_userVerifyDialog->exec();
-//            m_userVerifyDialog->deleteLater();
-//            m_userVerifyDialog = nullptr;
         }
     }
 }
 
 void WizMainWindow::on_quickSync_request(const QString& strKbGUID)
 {
-    WizKMSyncThread::quickSyncKb(strKbGUID);
+    m_syncQuick->addQuickSyncKb(strKbGUID);
 }
 
 void WizMainWindow::setSystemTrayIconVisible(bool bVisible)
@@ -704,6 +728,29 @@ void WizMainWindow::on_viewMessage_request(qint64 messageID)
     WizCategoryViewMessageItem* pItem = dynamic_cast<WizCategoryViewMessageItem*>(pBase);
     showMessageList(pItem);
     m_msgList->selectMessage(messageID);
+}
+
+
+void WizMainWindow::on_viewMessage_requestNormal(QVariant messageData)
+{
+    if (messageData.type() == QVariant::Bool)
+    {
+        QString strUrl = WizApiEntry::standardCommandUrl("link");
+        if (!strUrl.startsWith("http")) {
+            return;
+        }
+        strUrl = strUrl + "&site=wiznote";
+        strUrl += "&name=mac-sync-error-solution";
+        QDesktopServices::openUrl(QUrl(strUrl));
+    }
+    else if (messageData.type() == QVariant::Int)
+    {
+        if (WIZKM_XMLRPC_ERROR_VIP_SERVICE_EXPR == messageData
+                || WIZKM_XMLRPC_ERROR_FREE_SERVICE_EXPR == messageData)
+        {
+            showVipUpgradePage();
+        }
+    }
 }
 
 void WizMainWindow::on_viewMessage_request(const WIZMESSAGEDATA& msg)
@@ -984,6 +1031,10 @@ void WizMainWindow::initMenuBar()
     action->setCheckable(true);
     action->setData(WizDocumentListView::TypeThumbnail);
     m_viewTypeActions->addAction(action);
+    action = m_actions->actionFromName(WIZCATEGORY_OPTION_SEARCHRESULTVIEW);
+    action->setCheckable(true);
+    action->setData(WizDocumentListView::TypeSearchResult);
+    m_viewTypeActions->addAction(action);
     action = m_actions->actionFromName(WIZCATEGORY_OPTION_TWOLINEVIEW);
     action->setCheckable(true);
     action->setData(WizDocumentListView::TypeTwoLine);
@@ -1085,9 +1136,23 @@ void WizMainWindow::createNoteByTemplateCore(const TemplateData& tmplData)
     WIZDOCUMENTDATA data;
     data.strKbGUID = kbGUID;
     //
+    data.strTitle = tmplData.strTitle.isEmpty() ? info.completeBaseName() : tmplData.strTitle;
+    //  Journal {date}({week})
+    if (tmplData.strTitle.isEmpty())
+    {
+        data.strTitle = tmplData.strName;
+    }
+    else
+    {
+        WizOleDateTime dt;
+        data.strTitle.replace("{date}", dt.toLocalLongDate());
+        data.strTitle.replace("{date_time}", dt.toLocalLongDate() + " " + dt.toString("hh:mm:ss"));
+        QLocale local;
+        data.strTitle.replace("{week}", local.toString(dt.toLocalTime(), "ddd"));
+    }
+    //
     if (kbGUID.isEmpty())   //personal
     {
-        data.strTitle = tmplData.strTitle.isEmpty() ? info.completeBaseName() : tmplData.strTitle;
         data.strLocation = tmplData.strFolder;
 
         if (data.strLocation.isEmpty())
@@ -1107,21 +1172,8 @@ void WizMainWindow::createNoteByTemplateCore(const TemplateData& tmplData)
                 }
             }
         }
-        //  Journal {date}({week})
-        if (tmplData.strTitle.isEmpty())
-        {
-            data.strTitle = tmplData.strName;
-        }
-        else
-        {
-            WizOleDateTime dt;
-            data.strTitle.replace("{date}", dt.toLocalLongDate());
-            data.strTitle.replace("{date_time}", dt.toLocalLongDate() + " " + dt.toString("hh:mm:ss"));
-            QLocale local;
-            data.strTitle.replace("{week}", local.toString(dt.toLocalTime(), "ddd"));
-        }
     }
-    else
+    else        
     {
         data.strLocation = currLocation;
     }
@@ -1288,22 +1340,7 @@ bool caseInsensitiveLessThan(QAction* action1, QAction* action2) {
     const QString k1 = action1->text().toLower();
     const QString k2 = action2->text().toLower();
 
-    static bool isSimpChinese = Utils::WizMisc::isChinese();
-    if (isSimpChinese)
-    {
-        if (QTextCodec* pCodec = QTextCodec::codecForName("GBK"))
-        {
-            QByteArray arrThis = pCodec->fromUnicode(k1);
-            QByteArray arrOther = pCodec->fromUnicode(k2);
-            //
-            std::string strThisA(arrThis.data(), arrThis.size());
-            std::string strOtherA(arrOther.data(), arrOther.size());
-            //
-            return strThisA.compare(strOtherA.c_str()) < 0;
-        }
-    }
-    //
-    return  k1.compare(k2) < 0;
+    return WizToolsSmartCompare(k1, k2) < 0;
 }
 
 
@@ -1517,11 +1554,17 @@ void WizMainWindow::on_newNoteByExtraMenu_request()
 
 void WizMainWindow::windowActived()
 {
+    if (m_quiting)
+        return;
+    //
     static  bool isBizUser = m_dbMgr.db().meta("BIZS", "COUNT").toInt() > 0;
     if (!isBizUser || !m_bQuickDownloadMessageEnable)
         return;
+    //
+    if (!m_syncFull)
+        return;
 
-    m_sync->quickDownloadMesages();
+    m_syncFull->quickDownloadMesages();
     WizGetAnalyzer().logAction("bizUserQuickDownloadMessage");
 }
 
@@ -1540,10 +1583,20 @@ void WizMainWindow::OpenURLInDefaultBrowser(const QString& strUrl)
  */
 void WizMainWindow::GetToken(const QString& strFunctionName)
 {
-    QString strToken = WizToken::token();
-    QString strExec = strFunctionName + QString("('%1')").arg(strToken);
-    qDebug() << "cpp get token callled : " << strExec;
-    m_doc->commentView()->page()->runJavaScript(strExec);
+    CString functionName(strFunctionName);
+    ::WizExecuteOnThread(WIZ_THREAD_NETWORK, [=] {
+        //
+        QString strToken = WizToken::token();
+        if (strToken.isEmpty())
+            return;
+        //
+        ::WizExecuteOnThread(WIZ_THREAD_MAIN, [=] {
+
+            QString strExec = functionName + QString("('%1')").arg(strToken);
+            qDebug() << "cpp get token callled : " << strExec;
+            m_doc->commentView()->page()->runJavaScript(strExec);
+        });
+    });
 }
 
 /**   web页面调用该方法，将页面的结果返回
@@ -1579,6 +1632,73 @@ void WizMainWindow::AppStoreIAP()
 void WizMainWindow::copyLink(const QString& link)
 {
     Utils::WizMisc::copyTextToClipboard(link);
+}
+
+void WizMainWindow::onClickedImage(const QString& src, const QString& list)
+{
+
+    Json::Value d;
+    Json::Reader reader;
+    if (reader.parse(list.toUtf8().constData(), d))
+    {
+        CWizStdStringArray files;
+        if (d.isArray())
+        {
+            for (int i = 0; i < d.size(); i++)
+            {
+                QString file = QString::fromStdString(d[i].asString());
+                files.push_back(file);
+            }
+        }
+        //
+        if (!files.empty())
+        {
+            files.insert(files.begin(), src);
+            //
+            CWizStdStringArray sl;
+            sl.push_back("open");
+            sl.push_back("-a");
+            sl.push_back("Preview");
+            //
+            QString workingPath;
+            //
+            for (auto it = files.begin(); it != files.end(); it++)
+            {
+                QString fileUrl = *it;
+                QUrl url(fileUrl);
+                QString path = url.toLocalFile();
+                //
+                if (workingPath.isEmpty())
+                {
+                    workingPath = Utils::WizMisc::extractFilePath(path);
+                }
+                else
+                {
+                    QString currentPath = Utils::WizMisc::extractFilePath(path);
+                    if (currentPath != workingPath)
+                    {
+                        continue;
+                    }
+                }
+                //
+                QString fileName = Utils::WizMisc::extractFileName(path);
+                sl.push_back("\"" + fileName + "\"");
+            }
+            //
+            CString commandLine;
+            WizStringArrayToText(sl, commandLine, " ");
+            //
+            QProcess* process = new QProcess(this);
+            process->setWorkingDirectory(workingPath);
+            process->start(commandLine);
+            //
+            return;
+        }
+    }
+    //
+
+    QUrl url = QUrl(src);
+    QDesktopServices::openUrl(url);
 }
 
 #ifndef Q_OS_MAC
@@ -1794,8 +1914,6 @@ void WizMainWindow::initToolBar()
 #endif
     //
     connect(m_searchWidget, SIGNAL(doSearch(const QString&)), SLOT(on_search_doSearch(const QString&)));
-    connect(m_searchWidget, SIGNAL(advancedSearchRequest()), SLOT(on_actionAdvancedSearch_triggered()));
-//    connect(m_searchWidget, SIGNAL(addCustomSearchRequest()), SLOT(on_actionAddCustomSearch_triggered()));
 }
 
 void WizMainWindow::initClient()
@@ -1943,7 +2061,7 @@ QWidget* WizMainWindow::createNoteListView()
 //    m_labelDocumentsCount->setMargin(5);
 //    layoutActions->addWidget(m_labelDocumentsCount);
 //    connect(m_documents, SIGNAL(documentCountChanged()), SLOT(on_documents_documentCountChanged()));
-//    connect(m_documents, SIGNAL(changeUploadRequest(QString)), SLOT(on_quickSync_request(QString)));
+    connect(m_documents, SIGNAL(changeUploadRequest(QString)), SLOT(on_quickSync_request(QString)));
 
 
 //    //sortBtn->setStyleSheet("padding-top:10px;");
@@ -2103,7 +2221,7 @@ void WizMainWindow::on_btnMarkDocumentsRead_triggered()
         db.setGroupDocumentsReaded();
     }
 
-    m_documents->clear();
+    m_documents->clearAllItems();
 }
 
 //void MainWindow::on_documents_hintChanged(const QString& strHint)
@@ -2161,13 +2279,13 @@ void WizMainWindow::init()
 
 void WizMainWindow::on_actionAutoSync_triggered()
 {
-    m_sync->startSyncAll();
+    m_syncFull->startSyncAll();
 }
 
 void WizMainWindow::on_actionSync_triggered()
 {
     WizGetAnalyzer().logAction("ToolBarSyncAll");
-
+    //
     if (m_animateSync->isPlaying())
     {
         on_actionConsole_triggered();
@@ -2206,9 +2324,10 @@ void WizMainWindow::on_syncStarted(bool syncAll)
     }
 }
 
-void WizMainWindow::on_syncDone(int nErrorCode, const QString& strErrorMsg, bool isBackground)
+void WizMainWindow::on_syncDone(int nErrorCode, bool isNetworkError, const QString& strErrorMsg, bool isBackground)
 {
     m_animateSync->stopPlay();
+    //
 
     //
     if (isXMLRpcErrorCodeRelatedWithUserAccount(nErrorCode))
@@ -2227,6 +2346,35 @@ void WizMainWindow::on_syncDone(int nErrorCode, const QString& strErrorMsg, bool
         //当用户的企业付费到期并且有待上传的内容的时候，进行弹框提示
         WizMessageBox::information(this, tr("Info"), strErrorMsg);
     }
+    else
+    {
+        QSystemTrayIcon::MessageIcon icon = QSystemTrayIcon::Critical;
+        int delay = 30 * 1000;
+        QVariant param(isNetworkError);
+
+        if (isNetworkError) {
+            m_tray->showMessage(tr("Sync failed"), tr("Bad network connection, can not sync now. Please try again later. (code: %1)").arg(nErrorCode), icon, delay, param);
+            return;
+        } else {
+            //
+            QString message = tr("There is something wrong with sync service. Please try again later. (code: %1)").arg(nErrorCode);
+            if (WIZKM_XMLRPC_ERROR_VIP_SERVICE_EXPR == nErrorCode) {
+                message = QObject::tr("VIP service of has expired, please renew to VIP.");
+                param = QVariant((int)nErrorCode);
+            } else if (WIZKM_XMLRPC_ERROR_FREE_SERVICE_EXPR == nErrorCode) {
+                message = QObject::tr("User service of has expired, please upgrade to VIP.");
+                param = QVariant((int)nErrorCode);
+            } else if (WIZKM_XMLRPC_ERROR_BIZ_SERVICE_EXPR == nErrorCode) {
+                message = WizFormatString0(QObject::tr("Your {p} business service has expired."));
+            } else if (WIZKM_XMLRPC_ERROR_NOTE_COUNT_LIMIT == nErrorCode) {
+                message = WizFormatString0(QObject::tr("Group notes count limit exceeded!"));
+            }
+            //
+            m_tray->showMessage(tr("Sync failed"), message, icon, delay, param);
+            return;
+        }
+    }
+    //
 
     m_documents->viewport()->update();
     m_category->updateGroupsData();
@@ -2237,7 +2385,8 @@ void WizMainWindow::on_syncDone_userVerified()
 {
 
     if (m_dbMgr.db().setPassword(m_userVerifyDialog->password())) {
-        m_sync->clearCurrentToken();
+        m_syncFull->clearCurrentToken();
+        m_syncQuick->clearCurrentToken();
         syncAllData();
     }
 }
@@ -2266,7 +2415,7 @@ void WizMainWindow::on_promptMessage_request(int nType, const QString& strTitle,
 
 
 
-void WizMainWindow::promptServiceExpr(bool free)
+void WizMainWindow::promptServiceExpr(bool free, WIZGROUPDATA group)
 {
     static int lastPrompt = 0;
     if (lastPrompt != 0)
@@ -2286,26 +2435,26 @@ void WizMainWindow::promptServiceExpr(bool free)
     lastPrompt = WizGetTickCount();
 
     WizDatabase& db = m_dbMgr.db("");
-    bool biz = db.hasBiz();
+    bool isBizUser = db.hasBiz();
     //
     WizUserServiceExprDialog dlg(NULL);
-    dlg.setUserInfo(free, biz);
-    if (0 != dlg.exec())
+    dlg.setUserInfo(free, isBizUser, group);
+    if (0 != dlg.exec() && !group.isGroup())
     {
         showVipUpgradePage();
     }
     in  = false;
 }
 
-void WizMainWindow::on_promptFreeServiceExpr()
+void WizMainWindow::on_promptFreeServiceExpr(WIZGROUPDATA group)
 {
-    promptServiceExpr(true);
+    promptServiceExpr(true, group);
 }
 
 
-void WizMainWindow::on_promptVipServiceExpr()
+void WizMainWindow::on_promptVipServiceExpr(WIZGROUPDATA group)
 {
-    promptServiceExpr(false);
+    promptServiceExpr(false, group);
 }
 
 
@@ -2591,6 +2740,17 @@ void WizMainWindow::on_actionCategoryPersonalGroups_triggered()
 }
 
 void WizMainWindow::on_actionThumbnailView_triggered()
+{
+    QAction* action = qobject_cast<QAction*>(sender());
+    if (action)
+    {
+        int type = action->data().toInt();
+        m_documents->resetItemsViewType(type);
+        emit documentsViewTypeChanged(type);
+    }
+}
+
+void WizMainWindow::on_actionSearchResultView_triggered()
 {
     QAction* action = qobject_cast<QAction*>(sender());
     if (action)
@@ -2923,25 +3083,6 @@ void WizMainWindow::on_actionManual_triggered()
     WizGetAnalyzer().logAction("MenuBarManual");
 }
 
-void WizMainWindow::on_actionRebuildFTS_triggered()
-{
-    WizGetAnalyzer().logAction("rebuildFTS");
-
-    QMessageBox msg;
-    msg.setIcon(QMessageBox::Warning);
-    msg.setWindowTitle(tr("Rebuild full text search index"));
-    msg.addButton(QMessageBox::Ok);
-    msg.addButton(QMessageBox::Cancel);
-    msg.setText(tr("Rebuild full text search is quit slow if you have quite a few notes or attachments, you do not have to use this function while search should work as expected."));
-
-    if (QMessageBox::Ok == msg.exec())
-    {
-        WizGetAnalyzer().logAction("rebuildFTSConfirm");
-
-        rebuildFTS();
-    }
-}
-
 void WizMainWindow::on_actionSearch_triggered()
 {
     m_searchWidget->focus();
@@ -2949,27 +3090,19 @@ void WizMainWindow::on_actionSearch_triggered()
     WizGetAnalyzer().logAction("MenuBarSearch");
 }
 
-void WizMainWindow::on_actionResetSearch_triggered()
+void WizMainWindow::resetSearchStatus()
 {
     quitSearchStatus();
     m_searchWidget->clear();
-    m_searchWidget->focus();
     m_category->restoreSelection();
-    m_doc->web()->applySearchKeywordHighlight();
+}
 
+void WizMainWindow::on_actionResetSearch_triggered()
+{
+    resetSearchStatus();
+    m_searchWidget->focus();
+    //
     WizGetAnalyzer().logAction("MenuBarResetSearch");
-}
-
-void WizMainWindow::on_actionAdvancedSearch_triggered()
-{
-    m_category->on_action_advancedSearch();
-    WizGetAnalyzer().logAction("MenuBarAdvancedSearch");
-}
-
-void WizMainWindow::on_actionAddCustomSearch_triggered()
-{
-    m_category->on_action_addCustomSearch();
-    WizGetAnalyzer().logAction("MenuBarAddCustomSearch");
 }
 
 void WizMainWindow::on_actionFindReplace_triggered()
@@ -2991,16 +3124,19 @@ void WizMainWindow::on_actionSaveAsHtml_triggered()
 {
     if (WizDocumentWebView* editor = getActiveEditor())
     {
-        QString strPath = QFileDialog::getExistingDirectory(0, tr("Open Directory"),
-                                                           QDir::homePath(),
-                                                            QFileDialog::ShowDirsOnly
-                                                            | QFileDialog::DontResolveSymlinks);
-        if (!strPath.isEmpty())
-        {
-            editor->saveAsHtml(strPath + "/");
-        }
+        editor->saveAsHtml();
     }
     WizGetAnalyzer().logAction("MenuBarSaveAsHtml");
+}
+
+
+void WizMainWindow::on_actionSaveAsMarkdown_triggered()
+{
+    if (WizDocumentWebView* editor = getActiveEditor())
+    {
+        editor->saveAsMarkdown();
+    }
+    WizGetAnalyzer().logAction("MenuBarSaveAsMarkdown");
 }
 
 void WizMainWindow::on_actionImportFile_triggered()
@@ -3030,9 +3166,14 @@ void WizMainWindow::on_actionPrintMargin_triggered()
 
 void WizMainWindow::on_search_doSearch(const QString& keywords)
 {
+    m_category->saveSelection();
+    //
+    QString kbGuid = m_category->storedSelectedItemKbGuid();
+    m_searchWidget->setCurrentKb(kbGuid);
+    //
     m_strSearchKeywords = keywords;
     if (keywords.isEmpty()) {
-        on_actionResetSearch_triggered();
+        resetSearchStatus();
         return;
     }
     //
@@ -3042,30 +3183,34 @@ void WizMainWindow::on_search_doSearch(const QString& keywords)
         viewDocumentByWizKMURL(strUrl);
         return;
     }
-
-    m_category->saveSelection();
-    m_documents->clear();
     //
     m_noteListWidget->show();
     m_msgListWidget->hide();
     //
     m_settings->appendRecentSearch(keywords);
-    m_searcher->search(keywords, 500);
+    //m_searcher->search(keywords, 500);
     startSearchStatus();
+    //
+    QString key = keywords;
+    //
+    ::WizExecutingActionDialog::executeAction(tr("Searching..."), WIZ_THREAD_SEARCH, [=]{
+
+        CWizDocumentDataArray arrayDocument;
+        m_searcher->onlineSearch(kbGuid, key, arrayDocument);
+        //
+        ::WizExecuteOnThread(WIZ_THREAD_MAIN, [=]{
+
+            m_documents->clearAllItems();
+            m_documents->setDocuments(arrayDocument, true);
+            //
+        });
+    });
+    //
 }
 
 
 void WizMainWindow::on_searchProcess(const QString& strKeywords, const CWizDocumentDataArray& arrayDocument, bool bStart, bool bEnd)
 {
-    if (bEnd) {
-        m_doc->web()->clearSearchKeywordHighlight(); //need clear hightlight first
-        m_doc->web()->applySearchKeywordHighlight();
-    }
-
-//    if (strKeywords != m_strSearchKeywords) {
-//        return;
-//    }
-
     if (bStart) {
         m_documents->setLeadInfoState(DocumentLeadInfo_SearchResult);
         m_documents->setDocuments(arrayDocument);
@@ -3187,6 +3332,12 @@ void WizMainWindow::on_category_itemSelectionChanged()
     } else {
         oldItem = currentItem;
     }
+    //
+    if (WizCategoryViewTrashItem* pItem = dynamic_cast<WizCategoryViewTrashItem *>(currentItem))
+    {
+        m_category->on_action_deleted_recovery();
+        return;
+    }
 
     QTreeWidgetItem* categoryItem = category->currentItem();
     switch (categoryItem->type()) {
@@ -3197,7 +3348,7 @@ void WizMainWindow::on_category_itemSelectionChanged()
         {
             showMessageList(pItem);
             //
-            m_sync->quickDownloadMesages();
+            m_syncFull->quickDownloadMesages();
             WizGetAnalyzer().logAction("categoryMessageRootSelected");
         }
     }
@@ -3236,6 +3387,9 @@ void WizMainWindow::on_category_itemSelectionChanged()
         showDocumentList(category);
         break;
     }
+    //
+    QString kbGuid = m_category->selectedItemKbGUID();
+    m_searchWidget->setCurrentKb(kbGuid);
 }
 
 void WizMainWindow::on_documents_itemSelectionChanged()
@@ -3278,7 +3432,7 @@ void WizMainWindow::on_options_settingsChanged(WizOptionsType type)
         m_doc->settingsChanged();
         break;
     case wizoptionsSync:
-        m_sync->setFullSyncInterval(userSettings().syncInterval());
+        m_syncFull->setFullSyncInterval(userSettings().syncInterval());
         break;
     case wizoptionsFont:
     {
@@ -3364,7 +3518,7 @@ void WizMainWindow::resetPermission(const QString& strKbGUID, const QString& str
     }
 }
 
-void WizMainWindow::viewDocument(const WIZDOCUMENTDATA& data, bool addToHistory)
+void WizMainWindow::viewDocument(const WIZDOCUMENTDATAEX& data, bool addToHistory)
 {
     Q_ASSERT(!data.strGUID.isEmpty());
 
@@ -3388,7 +3542,16 @@ void WizMainWindow::viewDocument(const WIZDOCUMENTDATA& data, bool addToHistory)
     if (addToHistory) {
         m_history->addHistory(data);
     }
+    //
+    m_actions->actionFromName(WIZACTION_GLOBAL_SAVE_AS_MARKDOWN)->setEnabled(WizIsMarkdownNote(data));
+    //
 }
+
+void WizMainWindow::titleChanged()
+{
+    m_actions->actionFromName(WIZACTION_GLOBAL_SAVE_AS_MARKDOWN)->setEnabled(WizIsMarkdownNote(m_doc->note()));
+}
+
 
 void WizMainWindow::locateDocument(const WIZDOCUMENTDATA& data)
 {
@@ -3585,7 +3748,7 @@ QString WizMainWindow::TranslateString(const QString& string)
 
 void WizMainWindow::syncAllData()
 {
-    m_sync->startSyncAll(false);
+    m_syncFull->startSyncAll(false);
     m_animateSync->startPlay();
 }
 
@@ -3598,7 +3761,8 @@ void WizMainWindow::reconnectServer()
         WizToken::setPasswd(m_settings->password());
     }
 
-    m_sync->clearCurrentToken();
+    m_syncFull->clearCurrentToken();
+    m_syncQuick->clearCurrentToken();
     connect(WizToken::instance(), SIGNAL(tokenAcquired(QString)),
             SLOT(on_TokenAcquired(QString)), Qt::QueuedConnection);
     WizToken::requestToken();
@@ -3769,6 +3933,8 @@ void WizMainWindow::initTrayIcon(QSystemTrayIcon* trayIcon)
 
     connect(m_tray, SIGNAL(viewMessageRequest(qint64)),
             SLOT(on_viewMessage_request(qint64)));
+    connect(m_tray, SIGNAL(viewMessageRequestNormal(QVariant)),
+            SLOT(on_viewMessage_requestNormal(QVariant)));
     //
     //
     trayIcon->setContextMenu(m_trayMenu);
@@ -3852,7 +4018,6 @@ void WizMainWindow::quitSearchStatus()
         m_searchWidget->clear();
         m_searchWidget->clearFocus();
         m_strSearchKeywords.clear();
-        m_doc->web()->applySearchKeywordHighlight();
     }
 
     m_documents->setAcceptAllSearchItems(false);
@@ -3870,6 +4035,9 @@ void WizMainWindow::initVariableBeforCreateNote()
 
 bool WizMainWindow::needShowNewFeatureGuide()
 {
+    if (m_settings->serverType() == EnterpriseServer)
+        return false;
+    //
     QString strGuideVserion = m_settings->newFeatureGuideVersion();
     if (strGuideVserion.isEmpty())
         return true;
@@ -4157,7 +4325,21 @@ void WizMainWindow::viewCurrentNoteInSeparateWindow()
 
 void WizMainWindow::quickSyncKb(const QString& kbGuid)
 {
-    WizKMSyncThread::quickSyncKb(kbGuid);
+    if (!m_syncQuick)
+        return;
+    //
+    m_syncQuick->addQuickSyncKb(kbGuid);
 }
+
+void WizMainWindow::setNeedResetGroups()
+{
+    if (!m_syncQuick || !m_syncFull)
+        return;
+    //
+    m_syncQuick->setNeedResetGroups();
+    m_syncFull->setNeedResetGroups();
+}
+
+
 
 

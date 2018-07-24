@@ -5,6 +5,7 @@
 
 #include <QString>
 #include <QMap>
+#include <QMutex>
 
 class WizCommonApiEntry
 {
@@ -14,13 +15,12 @@ public:
     static QString syncUrl();
     static QString asServerUrl();
     static QString messageServerUrl();
+    static QString searchUrl();
     static QString systemAvatarUrl(const QString& avatarName);
     static QString avatarDownloadUrl(const QString& strUserGUID);
     static QString avatarUploadUrl();
+    static QString commentUrlTemplate();
     static QString mailShareUrl(const QString& strKUrl, const QString& strMailInfo);
-    static QString commentUrl(const QString& strToken, const QString& strKbGUID,const QString& strGUID);
-    static QString commentCountUrl(const QString& strKUrl, const QString& strToken,
-                                   const QString& strKbGUID, const QString& strGUID);
     static QString accountInfoUrl(const QString& strToken);
     static QString groupAttributeUrl(const QString& strToken, const QString& strKbGUID);
     static QString groupUsersUrl(const QString& strToken, const QString& strBizGUID, const QString& strkbGUID);
@@ -41,9 +41,9 @@ public:
 
     static QString getUrlByCommand(const QString& strCommand);
 
-    static QString kUrlFromGuid(const QString& strToken, const QString& strKbGUID);
-
     static QString appstoreParam(bool useAndSymbol = true);
+
+    static QString newAsServerUrl();
 
 private:
     static QString requestUrl(const QString& strCommand);
@@ -52,9 +52,9 @@ private:
     static QString getUrlFromCache(const QString& strCommand);
 
 private:
+    static QMutex m_mutex;
     static QString m_server;
     static QMap<QString, QString> m_cacheMap;
-    static QMap<QString, QString> m_mapkUrl;
 };
 
 class WizApiEntry

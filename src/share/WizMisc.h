@@ -7,6 +7,7 @@
 #include <QBuffer>
 #include <QByteArray>
 #include <QSettings>
+#include <functional>
 
 #include "WizObject.h"
 #include "WizMd5.h"
@@ -113,6 +114,7 @@ bool WizSaveUnicodeTextToUtf16File(const QString& strFileName, const QString& st
 bool WizSaveUnicodeTextToUtf8File(const QString& strFileName, const QString& strText);
 bool WizSaveUnicodeTextToUtf8File(const QString& strFileName, const QByteArray& strText);
 bool WizSaveUnicodeTextToUtf8File(const QString& strFileName, const QString& strText, bool addBom);
+bool WizSaveUnicodeTextToData(QByteArray& data, const QString& strText, bool addBom);
 
 CString WizDateTimeToIso8601String(const WizOleDateTime& t);
 BOOL WizIso8601StringToDateTime(CString str, WizOleDateTime& t, CString& strError);
@@ -190,6 +192,9 @@ bool WizIsOffline();
 bool WizIsHighPixel();
 
 bool WizURLDownloadToFile(const QString& url, const QString& fileName, bool isImage);
+bool WizURLDownloadToData(const QString& url, QByteArray& data);
+
+bool WizURLDownloadToData(const QString& url, QByteArray& data, QObject* receiver, const char *member);
 
 
 ///  make sure document exist, if not try to download document, show download dialog by default.
@@ -258,6 +263,17 @@ class WizWaitCursor
 public:
     WizWaitCursor();
     ~WizWaitCursor();
+};
+
+
+class WizTempFileGuard
+{
+    QString m_fileName;
+public:
+    WizTempFileGuard(const QString& fileName);
+    WizTempFileGuard();
+    ~WizTempFileGuard();
+    QString fileName();
 };
 
 class WizIniFileEx

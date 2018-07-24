@@ -75,7 +75,7 @@ void installOnLinux()
     ::WizEnsurePathExists(applicationsPath);
     //
     QString iconsBasePath = QDir::homePath() + "/.local/share/icons/hicolor/";
-    ::WizEnsurePathExists(applicationsPath);
+    ::WizEnsurePathExists(iconsBasePath);
     //
     CWizStdStringArray arrayIconSize;
     arrayIconSize.push_back("16");
@@ -390,10 +390,11 @@ int main(int argc, char *argv[])
 {
     int ret = mainCore(argc, argv);
 
-    WizQueuedThreadsShutdown();
+    //WizQueuedThreadsShutdown();
     // clean up
     QString strTempPath = Utils::WizPathResolve::tempPath();
     ::WizDeleteAllFilesInFolder(strTempPath);
 
     return ret;
 }
+

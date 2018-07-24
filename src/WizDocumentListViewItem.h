@@ -21,7 +21,7 @@ enum WizDocumentListItemType
 struct WizDocumentListViewItemData
 {
     int nType;
-    WIZDOCUMENTDATA doc;
+    WIZDOCUMENTDATAEX doc;
     WIZABSTRACT thumb;
 
     QString location;    // use to sort by location
@@ -99,6 +99,7 @@ public:
 
     const WizDocumentListViewItemData& itemData() { return m_data; }
     const WIZDOCUMENTDATA& document() const { return m_data.doc; }
+    WIZDOCUMENTDATA& document() { return m_data.doc; }
     int itemType() const { return m_data.nType; }
     int documentSize() const;
     QString documentLocation() const;
@@ -161,6 +162,7 @@ private:
 
     int m_nSize;
     QString m_strTags;
+    QString m_strAuthor;
     const QString& tags();
     const QString& tagTree();
 

@@ -8,7 +8,7 @@
 #include <QSplitter>
 #include <QList>
 #include <QLabel>
-#include "rapidjson/document.h"
+#include "share/jsoncpp/json/json.h"
 
 #include "widgets/WizTagBar.h"
 #include "WizTitleEdit.h"
@@ -28,6 +28,8 @@
 #include "share/WizAnimateAction.h"
 #include "share/WizAnalyzer.h"
 #include "share/WizGlobal.h"
+#include "share/WizThreads.h"
+#include "sync/WizApiEntry.h"
 #include "utils/WizStyleHelper.h"
 #include "utils/WizPathResolve.h"
 #include "widgets/WizLocalProgressWebView.h"
@@ -120,12 +122,13 @@ WizTitleBar::WizTitleBar(WizExplorerApp& app, QWidget *parent)
     m_shareMenu->addAction(WIZACTION_TITLEBAR_SHARE_DOCUMENT_BY_EMAIL, this, SLOT(onEmailActionClicked()));
 //    m_shareBtn->setMenu(shareMenu);
 
-//    m_historyBtn = new CellButton(CellButton::ImageOnly, this);
-//    m_historyBtn->setFixedHeight(nTitleHeight);
+    //隐藏历史版本按钮，给以后增加提醒按钮保留位置
+//    WizCellButton* historyBtn = new WizCellButton(WizCellButton::ImageOnly, this);
+//    historyBtn->setFixedHeight(nTitleHeight);
 //    QString historyShortcut = ::WizGetShortcut("EditNoteHistory", "Alt+5");
-//    m_historyBtn->setShortcut(QKeySequence::fromString(historyShortcut));
-//    m_historyBtn->setNormalIcon(::WizLoadSkinIcon(strTheme, "document_history"), tr("View and recover note's history (Alt + 5)"));
-//    connect(m_historyBtn, SIGNAL(clicked()), SLOT(onHistoryButtonClicked()));
+//    historyBtn->setShortcut(QKeySequence::fromString(historyShortcut));
+//    historyBtn->setNormalIcon(::WizLoadSkinIcon(strTheme, "document_history"), tr("View and recover note's history (Alt + 5)"));
+//    connect(historyBtn, SIGNAL(clicked()), SLOT(onHistoryButtonClicked()));
 
 //    m_emailBtn = new CellButton(CellButton::ImageOnly, this);
 //    m_emailBtn->setFixedHeight(nTitleHeight);
@@ -159,8 +162,8 @@ WizTitleBar::WizTitleBar(WizExplorerApp& app, QWidget *parent)
     m_commentsBtn->setNormalIcon(::WizLoadSkinIcon(strTheme, "comments"), tr("Add comments  %1C").arg(getOptionKey()));
     m_commentsBtn->setCheckedIcon(::WizLoadSkinIcon(strTheme, "comments_on"), tr("Add comments  %1C").arg(getOptionKey()));
     connect(m_commentsBtn, SIGNAL(clicked()), SLOT(onCommentsButtonClicked()));
-    connect(WizGlobal::instance(), SIGNAL(viewNoteLoaded(WizDocumentView*,const WIZDOCUMENTDATA&,bool)),
-            SLOT(onViewNoteLoaded(WizDocumentView*,const WIZDOCUMENTDATA&,bool)));
+    connect(WizGlobal::instance(), SIGNAL(viewNoteLoaded(WizDocumentView*,const WIZDOCUMENTDATAEX&,bool)),
+            SLOT(onViewNoteLoaded(WizDocumentView*,const WIZDOCUMENTDATAEX&,bool)));
 
 
     QHBoxLayout* layoutInfo2 = new QHBoxLayout();
@@ -172,7 +175,8 @@ WizTitleBar::WizTitleBar(WizExplorerApp& app, QWidget *parent)
     layoutInfo2->addWidget(m_separateBtn);
     layoutInfo2->addWidget(m_tagBtn);
     layoutInfo2->addWidget(m_shareBtn);
-//    layoutInfo2->addWidget(m_historyBtn);
+    //隐藏历史版本按钮，给以后增加提醒按钮保留位置
+    //layoutInfo2->addWidget(historyBtn);
 //    layoutInfo2->addWidget(m_emailBtn);
     layoutInfo2->addWidget(m_infoBtn);
     layoutInfo2->addWidget(m_attachBtn);
@@ -195,8 +199,8 @@ WizTitleBar::WizTitleBar(WizExplorerApp& app, QWidget *parent)
     connect(m_notifyBar, SIGNAL(labelLink_clicked(QString)), SIGNAL(notifyBar_link_clicked(QString)));
     connect(m_tagBar, SIGNAL(widgetStatusChanged()), SLOT(updateTagButtonStatus()));
 
-    connect(m_commentManager, SIGNAL(commentUrlAcquired(QString,QString)),
-            SLOT(on_commentUrlAcquired(QString,QString)));
+    connect(m_commentManager, SIGNAL(tokenAcquired(QString)),
+            SLOT(on_commentTokenAcquired(QString)));
     connect(m_commentManager, SIGNAL(commentCountAcquired(QString,int)),
             SLOT(on_commentCountAcquired(QString,int)));
 }
@@ -403,6 +407,10 @@ void WizTitleBar::setEditorMode(WizEditorMode editorMode)
     {
         showInfoBar();
     }
+    else
+    {
+        showEditorBar();
+    }
 }
 
 void WizTitleBar::setEditButtonEnabled(bool enable)
@@ -427,9 +435,9 @@ void WizTitleBar::resetTitle(const QString& strTitle)
 
 }
 
-void WizTitleBar::moveTitileTextToPlaceHolder()
+void WizTitleBar::clearAndSetPlaceHolderText(const QString& text)
 {
-    m_editTitle->setPlaceholderText(m_editTitle->text());
+    m_editTitle->setPlaceholderText(text);
     m_editTitle->clear();
 }
 
@@ -625,15 +633,17 @@ void WizTitleBar::onInfoButtonClicked()
     //
     noteView()->wordCount([=](const QString& json){
         //
-        rapidjson::Document d;
-        d.Parse(json.toUtf8().constData());
+        Json::Value d;
+        Json::Reader reader;
+        if (!reader.parse(json.toUtf8().constData(), d))
+            return;
 
         try {
-            int nWords = d.FindMember("nWords")->value.GetInt();
-            int nChars = d.FindMember("nChars")->value.GetInt();
-            int nCharsWithSpace = d.FindMember("nCharsWithSpace")->value.GetInt();
-            int nNonAsianWords = d.FindMember("nNonAsianWords")->value.GetInt();
-            int nAsianChars = d.FindMember("nAsianChars")->value.GetInt();
+            int nWords = d["nWords"].asInt();
+            int nChars = d["nChars"].asInt();
+            int nCharsWithSpace = d["nCharsWithSpace"].asInt();
+            int nNonAsianWords = d["nNonAsianWords"].asInt();
+            int nAsianChars = d["nAsianChars"].asInt();
             //
             m_info->setWordCount(nWords, nChars, nCharsWithSpace, nNonAsianWords, nAsianChars);
 
@@ -694,7 +704,7 @@ void WizTitleBar::onCommentsButtonClicked()
         splitter->setSizes(lin);
         commentWidget->show();
 
-        m_commentManager->queryCommentUrl(view->note().strKbGUID, view->note().strGUID);
+        m_commentManager->queryCommentCount(view->note().strKbGUID, view->note().strGUID, true);
     } else {
         m_commentsBtn->setEnabled(false);
     }
@@ -713,7 +723,7 @@ void WizTitleBar::onCommentPageLoaded(bool ok)
     }
 }
 
-void WizTitleBar::onViewNoteLoaded(WizDocumentView* view, const WIZDOCUMENTDATA& note, bool bOk)
+void WizTitleBar::onViewNoteLoaded(WizDocumentView* view, const WIZDOCUMENTDATAEX& note, bool bOk)
 {
     if (!bOk)
         return;    
@@ -724,42 +734,41 @@ void WizTitleBar::onViewNoteLoaded(WizDocumentView* view, const WIZDOCUMENTDATA&
 
     m_commentsBtn->setCount(0);
     m_commentManager->queryCommentCount(note.strKbGUID, note.strGUID, true);
-
-    WizLocalProgressWebView* commentWidget = noteView()->commentWidget();
-    if (commentWidget && commentWidget->isVisible())
-    {
-        //commentWidget->showLocalProgress();
-        m_commentManager->queryCommentUrl(note.strKbGUID, note.strGUID);
-    }
 }
 
-void WizTitleBar::on_commentUrlAcquired(QString GUID, QString url)
+void WizTitleBar::on_commentTokenAcquired(QString token)
 {
-    QUrl commentsUrl(url);
-    QUrlQuery query(commentsUrl.query());
-
-    QString token = query.queryItemValue("token");
-    QString kbGuid = query.queryItemValue("kb_guid");
-    //
     WizDocumentView* view = noteView();
-    if (view && view->note().strGUID == GUID)
+    if (view)
     {
-        WizLocalProgressWebView* commentWidget = noteView()->commentWidget();
+        WizLocalProgressWebView* commentWidget = view->commentWidget();
         if (commentWidget && commentWidget->isVisible())
         {
-            if (url.isEmpty())
+            if (token.isEmpty())
             {
-                qDebug() << "Wow, query comment url failed!";
+                qDebug() << "Wow, query token= failed!";
                 loadErrorPage();
             }
             else
             {
+                WIZDOCUMENTDATA note = view->note();
 
-                QString js = QString("updateCmt('%1','%2','%3')").arg(token).arg(kbGuid).arg(GUID);
+                QString js = QString("updateCmt('%1','%2','%3')").arg(token).arg(note.strKbGUID).arg(note.strGUID);
+#ifdef QT_DEBUG
+                qDebug() << js;
+#endif
                 commentWidget->web()->page()->runJavaScript(js, [=](const QVariant& vRet){
                     if (!vRet.toBool())
                     {
-                        commentWidget->web()->load(url);
+                        QString commentUrlTemplate = m_commentManager->getCommentUrlTemplate();
+                        if (!commentUrlTemplate.isEmpty())
+                        {
+                            QString strUrl = commentUrlTemplate;
+                            strUrl.replace("{token}", token);
+                            strUrl.replace("{kbGuid}", note.strKbGUID);
+                            strUrl.replace("{documentGuid}", note.strGUID);
+                            commentWidget->web()->load(strUrl);
+                        }
                     }
                 });
             }

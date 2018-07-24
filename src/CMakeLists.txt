@@ -16,6 +16,7 @@ set(wiznote_SOURCES_MAC
     mac/rmstore/RMStoreAppReceiptVerificator.mm
     mac/WizNotificationCenter.mm
     widgets/WizIAPDialog.cpp
+    mac/DTWebArchive.m
 )
 
 set(wiznote_HEADERS_MAC
@@ -31,6 +32,7 @@ set(wiznote_HEADERS_MAC
     mac/rmstore/RMStoreAppReceiptVerificator.h
     mac/WizNotificationCenter.h
     widgets/WizIAPDialog.h
+    mac/DTWebArchive.h
 )
 
 
@@ -78,8 +80,7 @@ set(wiznote_SOURCES
     share/WizZiwReader.cpp
     html/WizHtmlReader.cpp
     html/WizHtmlCollector.cpp    
-    share/WizClucene.cpp
-    share/WizSearchIndexer.cpp
+    share/WizSearch.cpp
     widgets/WizScrollBar.cpp
     sync/WizToken.cpp
     sync/WizApiEntry.cpp
@@ -132,6 +133,9 @@ set(wiznote_SOURCES
     widgets/WizTableSelector.cpp
     widgets/WizUserServiceExprDialog.cpp
 
+    share/jsoncpp/jsoncpp.cpp
+    share/WizRequest.cpp
+
     WizCategoryView.cpp
     WizCategoryViewItem.cpp
     WizDocumentListView.cpp
@@ -149,7 +153,6 @@ set(wiznote_SOURCES
     WizProxyDialog.cpp
     WizCreateAccountDialog.cpp
     WizMainWindow.cpp
-    WizNoteComments.cpp
     WizCellButton.cpp
     WizTitleBar.cpp
     WizInfoBar.cpp
@@ -183,6 +186,7 @@ set(wiznote_SOURCES
     WizDocTemplateDialog.cpp
     WizMobileFileReceiver.cpp
     WizWebEngineInjectObject.cpp
+    WizCombineNotesDialog.cpp
 
     WizOEMSettings.cpp    
     mac/WizSearchWidget_mm.cpp
@@ -193,6 +197,7 @@ set(wiznote_SOURCES
     WizPositionDelegate.cpp
     main.cpp
     WizInitBizCertDialog.cpp
+    share/WizDocumentStyle.cpp
 )
 
 set(wiznote_HEADERS
@@ -235,8 +240,7 @@ set(wiznote_HEADERS
     sync/WizAsyncApi.h
     sync/WizAvatarUploader.h
     share/WizSyncableDatabase.h
-    share/WizClucene.h
-    share/WizSearchIndexer.h
+    share/WizSearch.h
     widgets/WizAboutDialog.h
     widgets/WizSegmentedButton.h
     widgets/WizUserInfoWidget.h
@@ -255,6 +259,10 @@ set(wiznote_HEADERS
     share/WizShadowEffect.h
     widgets/WizTableSelector.h
 
+    share/jsoncpp/json/json.h
+    share/jsoncpp/json/json-forwards.h
+    share/WizRequest.h
+
     WizDef.h
     WizActions.h
     WizNoteStyle.h
@@ -272,8 +280,6 @@ set(wiznote_HEADERS
     WizProxyDialog.h
     WizCreateAccountDialog.h
     WizMainWindow.h
-    WizNoteComments.h
-    WizNoteComments_p.h
     WizCellButton.h
     WizTitleBar.h
     WizInfoBar.h
@@ -356,6 +362,8 @@ set(wiznote_HEADERS
     share/WizThreads.h
     share/WizThreads_p.h
     WizInitBizCertDialog.h
+    share/WizDocumentStyle.h
+    WizCombineNotesDialog.h
 )
 
 set(wiznote_FORMS
@@ -381,6 +389,7 @@ set(wiznote_FORMS
     ui/WizExecutingActionDialog.ui
     ui/WizInitBizCertDialog.ui
     ui/WizUserServiceExprDialog.ui
+    ui/WizCombineNotesDialog.ui
 )
 
 set(wiznote_TRANSLATIONS
@@ -457,6 +466,7 @@ if(UNIX)
     elseif(NOT APPLE)
         add_executable(WizNote ${wiznote_SOURCES} ${wiznote_HEADERS} ${wiznote_FORM_HEADERS} ${wiznote_QM} ${wiznote_RC})
         set_target_properties(${PROJECT_NAME} PROPERTIES AUTOMOC_MOC_OPTIONS "-DQ_OS_LINUX")
+        set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "-static-libstdc++ -static-libgcc")
 
         install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
         install(DIRECTORY ${CMAKE_SOURCE_DIR}/share/ DESTINATION share/wiznote PATTERN ".DS_Store" EXCLUDE)
@@ -505,10 +515,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}
     ${CMAKE_SOURCE_DIR}/lib
-    ${CMAKE_SOURCE_DIR}/lib/clucene/src/core
-    ${CMAKE_SOURCE_DIR}/lib/clucene/src/shared
     ${CMAKE_SOURCE_DIR}/lib/openssl/include
-    ${CMAKE_BINARY_DIR}/lib/clucene/src/shared
     )
 
 if (APPLE)
@@ -531,8 +538,6 @@ if(UNIX)
 			target_link_libraries(${PROJECT_NAME}
 				quazip
 				cryptlib
-				clucene-core-static
-				clucene-shared-static
 				Qt5::WebEngine
 				Qt5::WebEngineWidgets
 				${CMAKE_SOURCE_DIR}/lib/openssl/lib/libcrypto.a
@@ -543,8 +548,6 @@ if(UNIX)
 			target_link_libraries(${PROJECT_NAME}
 				quazip
 				cryptlib
-				clucene-core-static
-				clucene-shared-static
 				Qt5::WebEngine
 				Qt5::WebEngineWidgets
 				${CMAKE_SOURCE_DIR}/lib/openssl/lib/libcrypto.a
@@ -554,11 +557,10 @@ if(UNIX)
 		endif(APPSTORE_BUILD)
 	else(APPLE) #linux
 		target_link_libraries(${PROJECT_NAME}
-			X11
+                        -lpthread
+                        X11
 			quazip
 			cryptlib
-			clucene-core-static
-			clucene-shared-static
 			Qt5::WebEngine
 			Qt5::WebEngineWidgets
 			${CMAKE_DL_LIBS}
@@ -568,8 +570,6 @@ else(NOT UNIX)
 	target_link_libraries(${PROJECT_NAME}
 		quazip
 		cryptlib
-		clucene-core-static
-		clucene-shared-static
 		Qt5::WebEngine
 		Qt5::WebEngineWidgets
 		${CMAKE_DL_LIBS}

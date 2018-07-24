@@ -19,10 +19,11 @@ public:
     void setTimeoutWaitSeconds(int seconds);
 
 public:
-    QNetworkReply::NetworkError error() const { return m_error; }
-    QString errorString() const { return m_errorString; }
-    QByteArray result() const { return m_result; }
+    QNetworkReply::NetworkError error() const;
+    QString errorString() const;
+    const QByteArray& result() const { return m_result; }
     bool timeOut() const { return m_timeOut; }
+    bool isFinished() const { return m_finished; }
     QNetworkReply* networkReply() const;
 
     int exec(ProcessEventsFlags flags = AllEvents);
@@ -34,7 +35,8 @@ public Q_SLOTS:
     void on_downloadProgress(qint64 bytesReceived, qint64 bytesTotal);
     void on_uploadProgress(qint64 bytesSent, qint64 bytesTotal);
 
-
+Q_SIGNALS:
+    void downloadProgress(QUrl url, qint64 bytesReceived, qint64 bytesTotal);
 protected:
     virtual void doFinished(QNetworkReply* reply);
     virtual void doError(QNetworkReply::NetworkError error);
@@ -42,6 +44,7 @@ protected:
     QByteArray m_result;
     QNetworkReply* m_reply;
     QNetworkReply::NetworkError m_error;
+    QUrl m_url;
     QString m_errorString;
     bool m_timeOut;
     int m_timeOutSeconds;
@@ -50,6 +53,7 @@ protected:
     qint64 m_uploadBytes;
     qint64 m_lastUploadBytes;
     QTimer m_timer;
+    bool m_finished;
 };
 
 

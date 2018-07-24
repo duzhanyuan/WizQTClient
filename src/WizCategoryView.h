@@ -33,6 +33,7 @@ public:
     ~WizCategoryBaseView();
 
     QString selectedItemKbGUID();
+    QString storedSelectedItemKbGuid();
     void getDocuments(CWizDocumentDataArray& arrayDocument);
     bool acceptDocument(const WIZDOCUMENTDATA& document);
     void updateItem(QTreeWidgetItem* pItem) { update(indexFromItem(pItem, 0)); }
@@ -373,8 +374,10 @@ public Q_SLOTS:
     void on_action_user_newFolder_confirmed(int result);
     void on_action_user_newTag();
     void on_action_user_newTag_confirmed(int result);
+    void on_newTag_inputText_changed(const QString& text);
     void on_action_group_newFolder();
     void on_action_group_newFolder_confirmed(int result);
+    void on_group_newFolder_inputText_changed(const QString& text);
 
     void on_action_moveItem();
     void on_action_user_moveFolder();
@@ -422,7 +425,6 @@ public Q_SLOTS:
     void on_action_removeShortcut();
     void on_action_addToShortcuts();
 
-    void on_action_advancedSearch();
     void on_action_addCustomSearch();
     void on_action_editCustomSearch();
     void on_action_removeCustomSearch();

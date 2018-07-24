@@ -204,7 +204,8 @@ public:
     void editorCommandExecutePastePlainText();
     //
     void saveAsPDF();
-    void saveAsHtml(const QString& strDirPath);
+    void saveAsMarkdown();
+    void saveAsHtml();
     void shareNoteByEmail();
     void shareNoteByLink();
     //
@@ -242,8 +243,8 @@ public:
 private:
     void loadDocumentInWeb(WizEditorMode editorMode);
     //
-    void getAllEditorScriptAndStypeFileName(QStringList& arrayFile);
-    void insertScriptAndStyleCore(QString& strHtml, const QStringList& arrayFiles);
+    void getAllEditorScriptAndStypeFileName(std::map<QString, QString>& arrayFile);
+    void insertScriptAndStyleCore(QString& strHtml, const std::map<QString, QString>& files);
     //
     void tryResetTitle();
     bool onPasteCommand();
@@ -314,9 +315,6 @@ public Q_SLOTS:
 
     void on_editorCommandExecuteLinkInsert_accepted();
 
-    void applySearchKeywordHighlight();
-    void clearSearchKeywordHighlight();
-
     void on_insertCodeHtml_requset(QString strOldHtml);
 
     /* editor API */
@@ -358,7 +356,8 @@ public Q_SLOTS:
     void editorCommandExecuteInsertDate();
     void editorCommandExecuteInsertTime();
     void editorCommandExecuteRemoveFormat();
-    void editorCommandExecuteFormatMatch();
+    void editorCommandExecuteFormatPainterOn(bool multi);
+    void editorCommandExecuteFormatPainterOff();
     void editorCommandExecuteInsertHorizontal();
     void editorCommandExecuteInsertCheckList();
     void editorCommandExecuteInsertImage();
@@ -402,6 +401,8 @@ private:
 
     //
     void innerFindText(QString text, bool next, bool matchCase);
+    //
+    QString getHighlightKeywords();
     //
 //    bool shouldAddUserDefaultCSS();
 };

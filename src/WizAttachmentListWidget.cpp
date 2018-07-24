@@ -234,7 +234,7 @@ void WizAttachmentListView::addAttachments()
     //
     if (ok)
     {
-        WizMainWindow::quickSyncKb(db.isGroup() ? db.kbGUID() : "");
+        WizMainWindow::instance()->quickSyncKb(db.isGroup() ? db.kbGUID() : "");
     }
 }
 
@@ -394,6 +394,10 @@ void WizAttachmentListView::waitForDownload()
 
 bool WizAttachmentListView::isAttachmentModified(const WIZDOCUMENTATTACHMENTDATAEX& attachment)
 {
+    return false;
+    //
+    //下面的方式是错误的，不应该按照这种方式检测，而应该检测文件的md5。
+    //
     QString fileNmae = m_dbMgr.db(attachment.strKbGUID).getAttachmentFileName(attachment.strGUID);
     QFileInfo info(fileNmae);
     if (info.exists())
@@ -446,6 +450,8 @@ void WizAttachmentListView::on_action_saveAttachmentAs()
     if (items.isEmpty())
         return;
     //
+    QString lastPath = WizMainWindow::instance()->userSettings().lastAttachmentPath();
+    //
     if (items.size() == 1)
     {
         if (WizAttachmentListViewItem* item = dynamic_cast<WizAttachmentListViewItem*>(items[0]))
@@ -462,9 +468,17 @@ void WizAttachmentListView::on_action_saveAttachmentAs()
                 QString attachName = item->attachment().strName;
                 m_downloaderHost->downloadData(item->attachment(), [=](){
                     WizExecuteOnThread(WIZ_THREAD_MAIN, [=](){
-                        QString strFileName = QFileDialog::getSaveFileName(this, QString(), attachName);
+                        //
+                        QString newName = attachName;
+                        if (!lastPath.isEmpty()) {
+                            newName = lastPath + newName;
+                        }
+                        //
+                        QString strFileName = QFileDialog::getSaveFileName(this, QString(), newName);
                         if (strFileName.isEmpty())
                             return;
+                        //
+                        WizMainWindow::instance()->userSettings().setLastAttachmentPath(Utils::WizMisc::extractFilePath(strFileName));
 
                         if (!::WizCopyFile(m_dbMgr.db(kbGUID).getAttachmentFileName(guid), strFileName, FALSE))
                         {
@@ -476,10 +490,17 @@ void WizAttachmentListView::on_action_saveAttachmentAs()
             }
             else
             {
-                QString strFileName = QFileDialog::getSaveFileName(this, QString(), item->attachment().strName);
+                QString newName = item->attachment().strName;
+                if (!lastPath.isEmpty()) {
+                    newName = lastPath + newName;
+                }
+                //
+                QString strFileName = QFileDialog::getSaveFileName(this, QString(), newName);
                 if (strFileName.isEmpty())
                     return;
 
+                WizMainWindow::instance()->userSettings().setLastAttachmentPath(Utils::WizMisc::extractFilePath(strFileName));
+                //
                 if (!::WizCopyFile(db.getAttachmentFileName(item->attachment().strGUID), strFileName, FALSE))
                 {
                     QMessageBox::critical(this, qApp->applicationName(), tr("Can not save attachment to %1").arg(strFileName));
@@ -490,8 +511,10 @@ void WizAttachmentListView::on_action_saveAttachmentAs()
     }
     else
     {
-        CString strDir = QFileDialog::getExistingDirectory(this, tr("Save attachments to"));
+        CString strDir = QFileDialog::getExistingDirectory(this, tr("Save attachments to"), lastPath);
         ::WizPathAddBackslash(strDir);
+        //
+        WizMainWindow::instance()->userSettings().setLastAttachmentPath(strDir);
 
         foreach (QListWidgetItem* it, items)
         {
@@ -576,7 +599,7 @@ void WizAttachmentListView::on_action_deleteAttachment()
     if (!strKbGUID.isEmpty())
     {
         WizDatabase& db = m_dbMgr.db(strKbGUID);
-        WizMainWindow::quickSyncKb(db.isGroup() ? db.kbGUID() : "");
+        WizMainWindow::instance()->quickSyncKb(db.isGroup() ? db.kbGUID() : "");
     }
 }
 
@@ -706,6 +729,7 @@ WizAttachmentListViewItem::WizAttachmentListViewItem(const WIZDOCUMENTATTACHMENT
     , m_loadState(Unkonwn)
     , m_loadProgress(0)
 {
+    setToolTip(att.strName);
 }
 
 QString WizAttachmentListViewItem::detailText(const WizAttachmentListView* view) const

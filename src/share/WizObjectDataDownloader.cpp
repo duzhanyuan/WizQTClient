@@ -153,13 +153,34 @@ bool WizObjectDownloader::downloadNormalData()
     WizKMDatabaseServer ksServer(info);
     connect(&ksServer, SIGNAL(downloadProgress(int, int)), SLOT(on_downloadProgress(int,int)));
 
-    // FIXME: should we query object before download data?
-    if (!ksServer.data_download(m_data.strObjectGUID,
-                                WIZOBJECTDATA::objectTypeToTypeString(m_data.eObjectType),
-                                m_data.arrayData, m_data.strDisplayName)) {
-        return false;
+    if (m_data.eObjectType == wizobjectDocument)
+    {
+        WIZDOCUMENTDATAEX ret;
+        ret.strGUID = m_data.strObjectGUID;
+        ret.strKbGUID = m_data.strKbGUID;
+        ret.strTitle = m_data.strDisplayName;
+        QString fileName = ::WizDatabaseManager::instance()->db(ret.strKbGUID).getDocumentFileName(ret.strGUID);
+        if (!ksServer.document_downloadData(m_data.strObjectGUID, ret, fileName))
+        {
+            qDebug() << WizFormatString1("Cannot download note data from server: %1", m_data.strDisplayName);
+            return false;
+        }
+        m_data.arrayData = ret.arrayData;
     }
-
+    else
+    {
+        WIZDOCUMENTATTACHMENTDATAEX ret;
+        ret.strGUID = m_data.strObjectGUID;
+        ret.strKbGUID = m_data.strKbGUID;
+        ret.strName = m_data.strDisplayName;
+        if (!ksServer.attachment_downloadData(m_data.strDocumentGuid, m_data.strObjectGUID, ret))
+        {
+            qDebug() << WizFormatString1("Cannot download attachment data from server: %1", m_data.strDisplayName);
+            return false;
+        }
+        m_data.arrayData = ret.arrayData;
+    }
+    //
     if (WizDatabaseManager* dbMgr = WizDatabaseManager::instance())
     {
         return dbMgr->db(m_data.strKbGUID).updateObjectData(m_data.strDisplayName, m_data.strObjectGUID,
@@ -190,44 +211,16 @@ bool WizObjectDownloader::downloadDocument()
     //
     if (!ksServer.document_getInfo(m_data.strObjectGUID, document))
         return false;
+    //
+    QString fileName = db.getDocumentFileName(m_data.strObjectGUID);
 
-    if (!ksServer.document_downloadData(m_data.strObjectGUID, document))
+    if (!ksServer.document_downloadData(m_data.strObjectGUID, document, fileName))
     {
         return false;
     }
     //
     document.strKbGUID = m_data.strKbGUID;
 
-    // check update of attachment
-    WIZOBJECTVERSION versionServer;
-    ksServer.wiz_getVersion(versionServer);
-    __int64 nLocalVersion = db.getObjectVersion("attachment");
-    if (document.nAttachmentCount > 0 && nLocalVersion < versionServer.nAttachmentVersion)
-    {
-        //todo: wsj, 奇怪的逻辑，需要修复
-        /*
-        std::deque<WIZDOCUMENTATTACHMENTDATAEX> arrayRet;
-        ksServer.attachment_getList(50, nLocalVersion, arrayRet);
-        //
-        for(auto attach : arrayRet)
-        {
-            if (attach.strDocumentGUID != document.strGUID)
-                continue;
-
-            nPart = WIZKM_XMKRPC_ATTACHMENT_PART_INFO;
-            WIZDOCUMENTATTACHMENTDATAEX attachRet = attach;
-            attachRet.strKbGUID = db.kbGUID();
-            if (ksServer.attachment_downloadData(attach.strGUID, attachRet))
-            {
-//                qDebug() << "get attachment from server : " << attachRet.strName;
-                //
-                db.blockSignals(true);
-                db.UpdateAttachment(attachRet);
-                db.blockSignals(false);
-            }
-        }
-        */
-    }
     //
     bool ret = false;
     db.blockSignals(true);
@@ -248,9 +241,9 @@ bool WizObjectDownloader::getUserInfo(WIZUSERINFOBASE& info)
         return false;
     }
 
+    info = WizToken::userInfo();
     info.strToken = token;
     info.strKbGUID = m_data.strKbGUID;
-    info.strDatabaseServer = WizCommonApiEntry::kUrlFromGuid(token, m_data.strKbGUID);
 
     return true;
 }

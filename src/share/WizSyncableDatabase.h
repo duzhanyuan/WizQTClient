@@ -17,6 +17,10 @@ struct IWizSyncableDatabase
     virtual bool onDownloadStyleList(const CWizStyleDataArray& arrayData) = 0;
     virtual bool onDownloadDocumentList(const CWizDocumentDataArray& arrayData) = 0;
     virtual bool onDownloadAttachmentList(const CWizDocumentAttachmentDataArray& arrayData) = 0;
+    virtual bool onDownloadMessageList(const CWizMessageDataArray& arrayMessage) = 0;
+    virtual bool onDownloadParamList(const CWizDocumentParamDataArray& arrayData) = 0;
+
+    virtual QString getDocumentFileName(const QString& strGUID) const = 0;
 
     virtual qint64 getObjectLocalVersion(const QString& strObjectGUID,
                                          const QString& strObjectType) = 0;
@@ -55,22 +59,28 @@ struct IWizSyncableDatabase
     virtual bool getModifiedDocumentList(CWizDocumentDataArray& arrayData) = 0;
     virtual bool getModifiedAttachmentList(CWizDocumentAttachmentDataArray& arrayData) = 0;
     virtual bool getModifiedMessageList(CWizMessageDataArray& arrayData) = 0;
+    virtual bool getModifiedParamList(CWizDocumentParamDataArray& arrayData) = 0;
 
-    virtual bool initDocumentData(const QString& strGUID, WIZDOCUMENTDATAEX& data) = 0;
+    virtual bool initDocumentData(const QString& strGUID, WIZDOCUMENTDATAEX& data, bool forceUploadData) = 0;
     virtual bool initAttachmentData(const QString& strGUID, WIZDOCUMENTATTACHMENTDATAEX& data) = 0;
 
     virtual bool onUploadObject(const QString& strGUID, const QString& strObjectType) = 0;
+    virtual bool onUploadParam(const QString& strDocumentGuid, const QString& strName) = 0;
 
     virtual bool modifyMessagesLocalChanged(CWizMessageDataArray &arrayData) = 0;
 
     virtual bool onDownloadGroups(const CWizGroupDataArray& arrayGroup) = 0;
     virtual bool onDownloadBizs(const CWizBizDataArray& arrayBiz) = 0;
+    virtual bool onDownloadBizUsers(const QString& kbGuid, const CWizBizUserDataArray& arrayUser) = 0;
     virtual IWizSyncableDatabase* getGroupDatabase(const WIZGROUPDATA& group) = 0;
     virtual void closeGroupDatabase(IWizSyncableDatabase* pDatabase) = 0;
     virtual IWizSyncableDatabase* getPersonalDatabase() = 0;
 
     virtual void setKbInfo(const QString& strKBGUID, const WIZKBINFO& info) = 0;
     virtual void setUserInfo(const WIZUSERINFO& info) = 0;
+    //
+    virtual QString getGroupName() = 0;
+    virtual WIZGROUPDATA getGroupInfo() = 0;
 
     virtual bool isGroup() = 0;
     virtual bool hasBiz() = 0;
@@ -122,7 +132,6 @@ struct IWizSyncableDatabase
     virtual bool getBizData(const QString& bizGUID, WIZBIZDATA& biz) = 0;
 
     //virtual CComPtr<IWizDocument> GetDocumentByGUID(const QString& strDocumentGUID) = 0;
-    virtual bool onDownloadMessages(const CWizUserMessageDataArray& arrayMessage) = 0;
 
     virtual void clearLastSyncError() = 0;
     virtual QString getLastSyncErrorMessage() = 0;
@@ -140,9 +149,11 @@ struct IWizSyncableDatabase
 
     virtual bool setMeta(const QString& strSection, const QString& strKey, const QString& strValue) = 0;
     virtual QString meta(const QString& strSection, const QString& strKey) = 0;
-    virtual void setBizGroupUsers(const QString& strkbGUID, const QString& strJson) = 0;
 
     virtual bool getAllNotesOwners(CWizStdStringArray &arrayOwners) = 0;
+    //
+    virtual bool deleteDocumentFromLocal(const QString& strDocumentGuid) = 0;
+    virtual bool deleteAttachmentFromLocal(const QString& strAttachmentGuid) = 0;
 };
 
 
@@ -170,6 +181,7 @@ public:
     {
         m_bStop = false;
         m_nLastError = 0;
+        m_bIsNetworkError = false;
     }
 
     virtual void onSyncProgress(int pos) {}
@@ -180,6 +192,8 @@ public:
     virtual void setStop(bool b) { m_bStop = b; }
     virtual bool isStop() const { return m_bStop; }
     virtual void setLastErrorCode(int nErrorCode) { m_nLastError = nErrorCode; }
+    virtual bool isNetworkError() const { return m_bIsNetworkError; }
+    virtual void setIsNetworkError(bool networkError) { m_bIsNetworkError = networkError; }
     virtual int getLastErrorCode() const { return m_nLastError; }
     virtual void setLastErrorMessage(const QString& message) { m_strLastErrorMessage = message; }
     virtual QString getLastErrorMessage() const { return m_strLastErrorMessage; }
@@ -191,8 +205,8 @@ public:
     virtual void onStorageLimit(IWizSyncableDatabase* pDatabase) {}
     virtual void onBizServiceExpr(IWizSyncableDatabase* pDatabase) {}
     virtual void onBizNoteCountLimit(IWizSyncableDatabase* pDatabase) {}
-    virtual void onFreeServiceExpr() {}
-    virtual void onVipServiceExpr() {}
+    virtual void onFreeServiceExpr(WIZGROUPDATA group) {}
+    virtual void onVipServiceExpr(WIZGROUPDATA group) {}
     virtual void onUploadDocument(const QString& strDocumentGUID, bool bDone) {}
     virtual void onBeginKb(const QString& strKbGUID) {}
     virtual void onEndKb(const QString& strKbGUID) {}
@@ -205,6 +219,7 @@ public:
 private:
     bool m_bStop;
     int m_nLastError;
+    bool m_bIsNetworkError;
     QString m_strLastErrorMessage;
 };
 

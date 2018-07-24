@@ -49,6 +49,7 @@
 #define DOCUMENT_STATUS_NEWVERSIONFOUNDED      0x0010
 #define DOCUMENT_STATUS_PERSONAL           0x0020
 #define DOCUMENT_STATUS_ON_EDITREQUEST       0x0040
+#define DOCUMENT_STATUS_ON_CHECKLIST       0x0080
 
 WizDocumentView::WizDocumentView(WizExplorerApp& app, QWidget* parent)
     : QWidget(parent)
@@ -163,11 +164,11 @@ WizDocumentView::WizDocumentView(WizExplorerApp& app, QWidget* parent)
     connect(&m_dbMgr, SIGNAL(documentUploaded(QString,QString)), \
             m_editStatusSyncThread, SLOT(documentUploaded(QString,QString)));
 
-    connect(WizGlobal::instance(), SIGNAL(viewNoteRequested(WizDocumentView*,const WIZDOCUMENTDATA&,bool)),
-            SLOT(onViewNoteRequested(WizDocumentView*,const WIZDOCUMENTDATA&,bool)));
+    connect(WizGlobal::instance(), SIGNAL(viewNoteRequested(WizDocumentView*,const WIZDOCUMENTDATAEX&,bool)),
+            SLOT(onViewNoteRequested(WizDocumentView*,const WIZDOCUMENTDATAEX&,bool)));
 
-    connect(WizGlobal::instance(), SIGNAL(viewNoteLoaded(WizDocumentView*,WIZDOCUMENTDATA,bool)),
-            SLOT(onViewNoteLoaded(WizDocumentView*,const WIZDOCUMENTDATA&,bool)));
+    connect(WizGlobal::instance(), SIGNAL(viewNoteLoaded(WizDocumentView*,WIZDOCUMENTDATAEX,bool)),
+            SLOT(onViewNoteLoaded(WizDocumentView*,const WIZDOCUMENTDATAEX&,bool)));
 
     connect(WizGlobal::instance(), SIGNAL(closeNoteRequested(WizDocumentView*)),
             SLOT(onCloseNoteRequested(WizDocumentView*)));
@@ -273,21 +274,22 @@ void WizDocumentView::resizeEvent(QResizeEvent* ev)
     m_title->editorToolBar()->adjustButtonPosition();
 }
 
-void WizDocumentView::onViewNoteRequested(WizDocumentView* view, const WIZDOCUMENTDATA& doc, bool forceEditing)
+void WizDocumentView::onViewNoteRequested(WizDocumentView* view, const WIZDOCUMENTDATAEX& doc, bool forceEditing)
 {
     if (view != this)
         return;
 
     if (doc.tCreated.secsTo(QDateTime::currentDateTime()) <= 1) {
+        //new note
         viewNote(doc, forceEditing);
-        m_title->moveTitileTextToPlaceHolder();
+        m_title->clearAndSetPlaceHolderText(doc.strTitle);
     } else {
         m_title->clearPlaceHolderText();
         viewNote(doc, forceEditing);
     }
 }
 
-void WizDocumentView::onViewNoteLoaded(WizDocumentView* view, const WIZDOCUMENTDATA& doc, bool bOk)
+void WizDocumentView::onViewNoteLoaded(WizDocumentView* view, const WIZDOCUMENTDATAEX& doc, bool bOk)
 {
 }
 
@@ -353,13 +355,13 @@ void WizDocumentView::initStat(const WIZDOCUMENTDATA& data, bool forceEdit)
     }
 }
 
-void WizDocumentView::viewNote(const WIZDOCUMENTDATA& wizDoc, bool forceEdit)
+void WizDocumentView::viewNote(const WIZDOCUMENTDATAEX& wizDoc, bool forceEdit)
 {
-    WIZDOCUMENTDATA dataTemp = wizDoc;
+    WIZDOCUMENTDATAEX dataTemp = wizDoc;
     //
     m_web->trySaveDocument(m_note, false, [=](const QVariant& ret){
         //
-        WIZDOCUMENTDATA data = dataTemp;
+        WIZDOCUMENTDATAEX data = dataTemp;
 
         if (m_dbMgr.db(m_note.strKbGUID).isGroup())
         {
@@ -478,7 +480,7 @@ void WizDocumentView::setEditorMode(WizEditorMode editorMode)
         // don not use message tips when check document editable
 //        m_title->showMessageTips(Qt::PlainText, tr("Checking whether note is eiditable..."));
         m_title->startEditButtonAnimation();
-        if (!checkDocumentEditable())
+        if (!checkDocumentEditable(false))
         {
             return;
         }
@@ -567,7 +569,7 @@ bool WizDocumentView::checkListClickable()
     {
         //m_title->showMessageTips(Qt::PlainText, tr("Checking whether checklist is clickable..."));
         setCursor(Qt::WaitCursor);
-        return checkDocumentEditable();
+        return checkDocumentEditable(true);
     }
     return false;
 }
@@ -650,7 +652,7 @@ void WizDocumentView::on_checkEditStatus_finished(const QString& strGUID, bool e
     }
 }
 
-void WizDocumentView::loadNote(const WIZDOCUMENTDATA& doc)
+void WizDocumentView::loadNote(const WIZDOCUMENTDATAEX& doc)
 {
     m_web->viewDocument(doc, m_editorMode);
     m_title->setNote(doc, m_editorMode, m_bLocked);
@@ -716,13 +718,17 @@ void WizDocumentView::stopCheckDocumentEditStatus()
     emit stopCheckDocumentEditStatusRequest(m_note.strKbGUID, m_note.strGUID);
 }
 
-bool WizDocumentView::checkDocumentEditable()
+bool WizDocumentView::checkDocumentEditable(bool checklist)
 {
     QEventLoop loop;
     connect(m_editStatusChecker, SIGNAL(checkEditStatusFinished(QString,bool)), &loop, SLOT(quit()));
     connect(m_editStatusChecker, SIGNAL(checkTimeOut(QString)), &loop, SLOT(quit()));
     startCheckDocumentEditStatus();
     m_editStatus = m_editStatus | DOCUMENT_STATUS_ON_EDITREQUEST;
+    if (checklist)
+    {
+        m_editStatus |= DOCUMENT_STATUS_ON_CHECKLIST;
+    }
     loop.exec();
     //
 
@@ -795,6 +801,13 @@ void WizDocumentView::on_download_finished(const WIZOBJECTDATA &data, bool bSucc
 
 
     bool onEditRequest = m_editStatus & DOCUMENT_STATUS_ON_EDITREQUEST;
+    if (onEditRequest)
+    {
+        if (m_editStatus & DOCUMENT_STATUS_ON_CHECKLIST)
+        {
+            onEditRequest = false;
+        }
+    }
     //
     bool forceEdit = onEditRequest ? true : false;
 
@@ -809,8 +822,10 @@ void WizDocumentView::on_document_data_modified(const WIZDOCUMENTDATA& data)
 
     reloadNote();
     //
-    WizMainWindow::quickSyncKb(data.strKbGUID);
+    WizMainWindow::instance()->quickSyncKb(data.strKbGUID);
 }
+
+
 
 void WizDocumentView::on_document_data_changed(const QString& strGUID,
                                               WizDocumentView* viewer)

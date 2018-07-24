@@ -290,8 +290,11 @@ void WizDatabaseManager::initSignals(WizDatabase* db)
     connect(db, SIGNAL(documentAbstractModified(const WIZDOCUMENTDATA&)),
             SIGNAL(documentAbstractModified(const WIZDOCUMENTDATA&)));
 
+    connect(db, SIGNAL(documentParamModified(const WIZDOCUMENTPARAMDATA&)),
+            SIGNAL(documentParamModified(const WIZDOCUMENTPARAMDATA&)));
+
     connect(db, SIGNAL(documentUploaded(QString,QString)),
-            SIGNAL(documentUploaded(QString,QString)));
+            SIGNAL(documentUploaded(const QString&,const QString&)));
 
     connect(db,SIGNAL(groupDocumentUnreadCountModified(QString)),
             SIGNAL(groupDocumentUnreadCountModified(QString)));

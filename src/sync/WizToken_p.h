@@ -28,10 +28,11 @@ public:
     void clearLastError();
     void setUserId(const QString& strUserId);
     void setPasswd(const QString& strPasswd);
-    WIZUSERINFO info();
+    WIZUSERINFO userInfo();
 
     int lastErrorCode() const;
     QString lastErrorMessage() const;
+    bool lastIsNetworkError() const;
 
 private:
     WIZUSERINFO m_info;
@@ -41,6 +42,7 @@ private:
     QMutex* m_mutex;
     int m_lastErrorCode;
     QString m_lastErrorMessage;
+    bool m_bLastIsNetworkError;
 
     WizToken* q;
 };

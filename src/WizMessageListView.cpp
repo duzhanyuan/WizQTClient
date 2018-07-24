@@ -14,10 +14,11 @@
 #include <QApplication>
 #include <QTextCodec>
 
-#include "rapidjson/document.h"
+#include "share/jsoncpp/json/json.h"
 
 #include "utils/WizStyleHelper.h"
 #include "utils/WizMisc.h"
+#include "utils/WizPinyin.h"
 #include "sync/WizAvatarHost.h"
 #include "sync/WizAsyncApi.h"
 #include "sync/WizApiEntry.h"
@@ -868,25 +869,26 @@ void WizMessageListView::on_itemSelectionChanged()
                 if (account.isPaidUser())
                     return;
             }
-            rapidjson::Document d;
-            d.Parse<0>(msgData.note.toUtf8().constData());
-
-            if (d.HasParseError() || !d.HasMember("link")) {
+            Json::Value d;
+            Json::Reader reader;
+            if (!reader.parse(msgData.note.toUtf8().constData(), d))
+                return;
+            if (!d.isMember("link")) {
                 qDebug() << "Error occured when try to parse json of messages : " << msgData.note;
                 return;
             }
 
-            QTextCodec* codec = QTextCodec::codecForName("UTF-8");
-            QTextDecoder* encoder = codec->makeDecoder();
-            const rapidjson::Value& u = d["link"];
-            QString str = encoder->toUnicode(u.GetString(), u.GetStringLength());
+            const Json::Value& u = d["link"];
+            QString str = QString::fromStdString(u.asString());
             WizExecuteOnThread(WIZ_THREAD_NETWORK, [str](){
                 QString link = str;
                 if (link.contains("{token}"))
                 {
                     link.replace("{token}", WizToken::token());
                 }
-                QDesktopServices::openUrl(link);
+                ::WizExecuteOnThread(WIZ_THREAD_MAIN, [=]{
+                    QDesktopServices::openUrl(link);
+                });
             });
         }
     }
@@ -1438,23 +1440,8 @@ bool WizSenderSelectorItem::operator<(const QListWidgetItem& other) const
         return true;
     if (pOther->itemID().isEmpty())
         return false;
-
-    static bool isChinese = Utils::WizMisc::isChinese();
-    if (isChinese)
-    {
-        if (QTextCodec* pCodec = QTextCodec::codecForName("GBK"))
-        {
-            QByteArray arrThis = pCodec->fromUnicode(m_text);
-            QByteArray arrOther = pCodec->fromUnicode(pOther->itemText());
-            //
-            std::string strThisA(arrThis.data(), arrThis.size());
-            std::string strOtherA(arrOther.data(), arrOther.size());
-            //
-            return strThisA.compare(strOtherA.c_str()) < 0;
-        }
-    }
-
-    return m_text.localeAwareCompare(pOther->itemText()) < 0;
+    //
+    return WizToolsSmartCompare(m_text, pOther->itemText()) < 0;
 }
 
 void WizClickableLabel::mouseReleaseEvent(QMouseEvent* ev)

@@ -1,11 +1,15 @@
-﻿#ifndef WIZKMSYNC_H
+#ifndef WIZKMSYNC_H
 #define WIZKMSYNC_H
 
 #include <QThread>
 #include <QMessageBox>
+#include <QWaitCondition>
+#include <QTimer>
+#include <QMutex>
 
 #include "WizSync.h"
 #include "WizKMServer.h"
+
 
 class WizDatabase;
 
@@ -24,8 +28,8 @@ class WizKMSyncEvents : public QObject , public IWizKMSyncEvents
     virtual void onStorageLimit(IWizSyncableDatabase* pDatabase);
     virtual void onBizServiceExpr(IWizSyncableDatabase* pDatabase);
     virtual void onBizNoteCountLimit(IWizSyncableDatabase* pDatabase);
-    virtual void onFreeServiceExpr();
-    virtual void onVipServiceExpr();
+    virtual void onFreeServiceExpr(WIZGROUPDATA group);
+    virtual void onVipServiceExpr(WIZGROUPDATA group);
     virtual void onUploadDocument(const QString& strDocumentGUID, bool bDone);
     virtual void onBeginKb(const QString& strKbGUID);
     virtual void onEndKb(const QString& strKbGUID);
@@ -34,8 +38,8 @@ Q_SIGNALS:
     void messageReady(const QString& strStatus);
     void promptMessageRequest(int nType, const QString& strTitle, const QString& strMsg);
     void bubbleNotificationRequest(const QVariant& param);
-    void promptFreeServiceExpr();
-    void promptVipServiceExpr();
+    void promptFreeServiceExpr(WIZGROUPDATA group);
+    void promptVipServiceExpr(WIZGROUPDATA group);
 };
 
 
@@ -44,7 +48,7 @@ class WizKMSyncThread : public QThread
     Q_OBJECT
 
 public:
-    WizKMSyncThread(WizDatabase& db, QObject* parent = 0);
+    WizKMSyncThread(WizDatabase& db, bool quickOnly, QObject* parent = 0);
     ~WizKMSyncThread();
     void startSyncAll(bool bBackground = true);
     bool isBackground() const;
@@ -63,7 +67,7 @@ public slots:
     void quickDownloadMesages();
 
 public:
-    static void quickSyncKb(const QString& kbGuid); //thread safe
+    static void setQuickThread(WizKMSyncThread* thread);
     static bool isBusy();
     static void waitUntilIdleAndPause();
     static void setPause(bool pause);
@@ -91,6 +95,7 @@ private:
     int m_nFullSyncSecondsInterval;
     bool m_bBusy;
     bool m_bPause;
+    bool m_quickOnly;
 
     //
     QMutex m_mutex;
@@ -111,20 +116,18 @@ private:
     bool downloadMesages();
     bool resetGroups();
 
-    void syncUserCert();
-    //
     bool peekQuickSyncKb(QString& kbGuid);
     //
     friend class CWizKMSyncThreadHelper;
 
 Q_SIGNALS:
     void syncStarted(bool syncAll);
-    void syncFinished(int nErrorCode, const QString& strErrorMesssage, bool isBackground);
+    void syncFinished(int nErrorCode, bool isNetworkError, const QString& strErrorMesssage, bool isBackground);
     void processLog(const QString& strStatus);
     void promptMessageRequest(int nType, const QString& strTitle, const QString& strMsg);
     void bubbleNotificationRequest(const QVariant& param);
-    void promptFreeServiceExpr();
-    void promptVipServiceExpr();
+    void promptFreeServiceExpr(WIZGROUPDATA group);
+    void promptVipServiceExpr(WIZGROUPDATA group);
 };
 
 class WizKMWaitAndPauseSyncHelper

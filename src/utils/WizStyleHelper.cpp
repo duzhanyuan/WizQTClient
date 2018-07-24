@@ -9,6 +9,7 @@
 #include <QTextLayout>
 #include <QDebug>
 #include <QApplication>
+#include <QTextDocument>
 
 #include "WizPathResolve.h"
 #include "../share/WizMisc.h"
@@ -421,6 +422,8 @@ int WizStyleHelper::listViewItemHeight(int nType)
 //        return fontHead(f) + fontNormal(f) + margin() * 5;
     case ListTypeThumb:
         return WizSmartScaleUI(122);
+    case ListTypeSearchResult:
+        return WizSmartScaleUI(160);
 //        return thumbnailHeight() + margin() * 2;
     case ListTypeSection:
         return WizSmartScaleUI(20);
@@ -603,7 +606,7 @@ void WizStyleHelper::drawListViewItemBackground(QPainter* p, const QRect& rc, bo
 }
 
 
-void WizStyleHelper::drawListViewItemBackground(QPainter* p, const QRect& rc, WizStyleHelper::ListViewBGType bgType)
+void WizStyleHelper::drawListViewItemBackground(QPainter* p, const QRect& rc, WizStyleHelper::ListViewBGType bgType, QColor color)
 {
     int borderMargin = 2;
 
@@ -628,6 +631,9 @@ void WizStyleHelper::drawListViewItemBackground(QPainter* p, const QRect& rc, Wi
         break;
     case ListBGTypeUnread:
         p->fillRect(rcBg, listViewItemBackground(ListBGTypeUnread));
+        break;
+    case ListBGTypeCustom:
+        p->fillRect(rcBg, color);
         break;
     default:
         break;
@@ -1047,11 +1053,11 @@ QVariant WizStyleHelper::getValue(const QString& key, const QVariant& defaultVal
     return m_settings->value(key, defaultValue);
 }
 
-QRect WizStyleHelper::initListViewItemPainter(QPainter* p, const QRect& lrc, ListViewBGType bgType, bool useFullSeperatorLine)
+QRect WizStyleHelper::initListViewItemPainter(QPainter* p, const QRect& lrc, ListViewBGType bgType, bool useFullSeperatorLine, QColor color)
 {
     QRect rc = lrc;
 
-    Utils::WizStyleHelper::drawListViewItemBackground(p, rc, bgType);
+    Utils::WizStyleHelper::drawListViewItemBackground(p, rc, bgType, color);
 
     Utils::WizStyleHelper::drawListViewItemSeperator(p, rc, bgType, useFullSeperatorLine);
 
@@ -1061,8 +1067,13 @@ QRect WizStyleHelper::initListViewItemPainter(QPainter* p, const QRect& lrc, Lis
 
 void WizStyleHelper::drawListViewItemThumb(QPainter* p, const QRect& rc, int nBadgeType,
                                         const QString& title, const QStringList& lead, const QString& location,
-                                        const QString& abs, bool bFocused, bool bSelected, QPixmap thumbPix)
+                                        const QString& abs, bool bFocused, bool bSelected, QPixmap thumbPix,
+                                        QColor textColor)
 {
+    if (bFocused || bSelected) {
+        textColor = QColor();
+    }
+
     QRect rcd = rc.adjusted(2, 0, 0, 0); //
 
     QFont fontTitle = p->font();
@@ -1078,7 +1089,7 @@ void WizStyleHelper::drawListViewItemThumb(QPainter* p, const QRect& rc, int nBa
         {
             QString strBadgeText(QObject::tr("[ Top ]"));
             QColor colorType = Utils::WizStyleHelper::listViewItemType(bSelected, bFocused);
-            rcTitle = Utils::WizStyleHelper::drawText(p, rcTitle, strBadgeText, 1, Qt::AlignVCenter | Qt::AlignLeft, colorType, fontTitle);
+            rcTitle = Utils::WizStyleHelper::drawText(p, rcTitle, strBadgeText, 1, Qt::AlignVCenter | Qt::AlignLeft, textColor.isValid() ? textColor : colorType, fontTitle);
             rcTitle.setCoords(rcTitle.right(), rcTitle.y(), rcd.right(), rcd.bottom());
         }
 
@@ -1088,7 +1099,7 @@ void WizStyleHelper::drawListViewItemThumb(QPainter* p, const QRect& rc, int nBa
         strTitle.replace("\r", " ");
         rcTitle.adjust(0, 0, - nSpace4AttachIcon, 0);
         QColor colorTitle = Utils::WizStyleHelper::listViewItemTitle(bSelected, bFocused);
-        QRect rcAttach = Utils::WizStyleHelper::drawText(p, rcTitle, strTitle, 1, Qt::AlignVCenter, colorTitle, fontTitle);
+        QRect rcAttach = Utils::WizStyleHelper::drawText(p, rcTitle, strTitle, 1, Qt::AlignVCenter, textColor.isValid() ? textColor : colorTitle, fontTitle);
         int titleHeight = rcAttach.height();
 
         rcAttach.setCoords(rcAttach.right(), rcAttach.top(), rcd.right(), rcTitle.bottom());
@@ -1125,7 +1136,7 @@ void WizStyleHelper::drawListViewItemThumb(QPainter* p, const QRect& rc, int nBa
             }
 
             QColor colorDate = Utils::WizStyleHelper::listViewItemLead(bSelected, bFocused);
-            rcLead = Utils::WizStyleHelper::drawText(p, rcLead, strInfo, 1, Qt::AlignVCenter, colorDate, fontThumb);
+            rcLead = Utils::WizStyleHelper::drawText(p, rcLead, strInfo, 1, Qt::AlignVCenter, textColor.isValid() ? textColor : colorDate, fontThumb);
             nLeadHeight = rcLead.height();
             rcLead = rcd.adjusted(rcLead.width() + rcLead.x() - rcd.x(), 0, 0, 0);
         }
@@ -1140,7 +1151,7 @@ void WizStyleHelper::drawListViewItemThumb(QPainter* p, const QRect& rc, int nBa
 
         QColor colorLocation = Utils::WizStyleHelper::listViewItemLocation(bSelected, bFocused);
         QString strInfo(location);
-        rcLead = Utils::WizStyleHelper::drawText(p, rcLead, strInfo, 1, Qt::AlignVCenter, colorLocation,
+        rcLead = Utils::WizStyleHelper::drawText(p, rcLead, strInfo, 1, Qt::AlignVCenter, textColor.isValid() ? textColor : colorLocation,
                                               fontThumb, true, Qt::ElideMiddle);
         nLeadHeight = rcLead.height();
     }
@@ -1170,11 +1181,78 @@ void WizStyleHelper::drawListViewItemThumb(QPainter* p, const QRect& rc, int nBa
             p->setClipRect(rcSummary);
             QColor colorSummary = Utils::WizStyleHelper::listViewItemSummary(bSelected, bFocused);
             if (!strText.isEmpty()) {
-                Utils::WizStyleHelper::drawText(p, rcSummary, strText, 2, Qt::AlignVCenter, colorSummary, fontThumb);
+                Utils::WizStyleHelper::drawText(p, rcSummary, strText, 2, Qt::AlignVCenter, textColor.isValid() ? textColor : colorSummary, fontThumb);
             }
             p->setClipRect(rc);
         }
     }
+}
+
+
+
+void WizStyleHelper::drawListViewItemSearchResult(QPainter* p, const QRect& rc, const QString& title, const QString& info,
+                                  const QString& abs, bool bFocused, bool bSelected, QColor textColor)
+{
+    QString newTitle = title;
+    newTitle = newTitle.replace("<", "&lt;");
+    newTitle = newTitle.replace(">", "&gt;");
+    newTitle = newTitle.replace("&lt;em&gt;", "<em>");
+    newTitle = newTitle.replace("&lt;/em&gt;", "</em>");
+    //
+    if (bFocused || bSelected) {
+        textColor = QColor();
+    }
+
+    QColor colorSummary = Utils::WizStyleHelper::listViewItemSummary(bSelected, bFocused);
+    QString summaryHtmlColor = "#" + ::WizColorToString(textColor.isValid() ? textColor : colorSummary);
+    //
+    QColor colorInfo = Utils::WizStyleHelper::listViewItemLocation(bSelected, bFocused);
+    QString infoHtmlColor = "#" + ::WizColorToString(textColor.isValid() ? textColor : colorInfo);
+
+    QColor titleColor = Utils::WizStyleHelper::listViewItemTitle(bSelected, bFocused);
+    QString titleHtmlColor = "#" + ::WizColorToString(textColor.isValid() ? textColor : titleColor);
+    //
+    QString infoHtmlColorHtml = "<font color='" + infoHtmlColor + "'>";
+    QString infoHtmlColorHtmlEnd = "</font>";
+    //
+    QString summaryHtmlColorHtml = "<font color='" + summaryHtmlColor + "'>";
+    QString summaryHtmlColorHtmlEnd = "</font>";
+    //
+    QString titleHtmlColorHtml = "<font color='" + titleHtmlColor + "'>";
+    QString titleHtmlColorHtmlEnd = "</font>";
+    //
+    QString title2 = "<div style='font-size:14px;line-height:130%'>" + titleHtmlColorHtml + newTitle + titleHtmlColorHtmlEnd + "</div>";
+    //
+    QString info2 = infoHtmlColorHtml + info + infoHtmlColorHtmlEnd;
+    QString abs2 = summaryHtmlColorHtml + abs + summaryHtmlColorHtmlEnd;
+    //
+    QString other = "<div style='font-size:12px;line-height:140%'>" + info2  + "<br />" + abs2 + "</div>";
+
+    QString html = title2 + other;
+    //
+    html = html.replace("<em>", "<font color='red'>");
+    html = html.replace("</em>", "</font>");
+    //
+    QRect rcd = rc.adjusted(2, 0, 0, 0); //
+    //
+    QTextDocument* doc = new QTextDocument(NULL);
+    doc->setUndoRedoEnabled(false);
+    doc->setHtml(html);
+    doc->setTextWidth(rcd.width());
+    doc->setUseDesignMetrics(true);
+    ////doc->setDefaultTextOption ( QTextOption (Qt::AlignHCenter )  );
+    //// height from doc QTextDocument
+    //// http://fop-miniscribus.googlecode.com/svn/trunk/fop_miniscribus.1.0.0/src/floating_box/floatdiagram.cpp
+    //////setMaximumHeight(DocumentHighgtActual());
+
+    //
+    p->save();
+    p->translate(rcd.topLeft());
+    QRect rc2(0, 0, rcd.width(), rcd.height());
+    doc->drawContents(p, rc2);
+    p->restore();
+    //
+    doc->deleteLater();
 }
 
 
